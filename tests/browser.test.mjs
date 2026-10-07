@@ -1,0 +1,152 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { resolve, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { chromium } from 'playwright';
+import { pdfFixture, wordFixture, sheetFixture, slidesFixture, legacyPpt } from './fixtures.mjs';
+
+const output = fileURLToPath(new URL('../dist/', import.meta.url));
+
+async function fixtureServer() {
+  const fixtures = new Map([
+    ['/report.pdf', pdfFixture()], ['/report.docx', await wordFixture()],
+    ['/report.xlsx', sheetFixture()], ['/report.xls', sheetFixture('xls')],
+    ['/report.pptx', await slidesFixture()], ['/report.ppt', legacyPpt()],
+    ['/download/123', sheetFixture()], ['/invalid.pdf', Buffer.from('Not a PDF')]
+  ]);
+  const requests = [];
+  const server = createServer(async (request, response) => {
+    const path = new URL(request.url, 'http://local.invalid').pathname;
+    requests.push(path);
+    response.setHeader('Access-Control-Allow-Origin', '*');
+    response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self'; frame-src 'self'; object-src 'none'");
+    if (path === '/') {
+      response.setHeader('Content-Type', 'text/html');
+      response.end('<!doctype html><html lang="zh-CN"><head><link rel="stylesheet" href="/styles.css"></head><body><div id="preview"></div><script type="module" src="/fixture.js"></script></body></html>');
+      return;
+    }
+    if (path === '/fixture.js') {
+      response.setHeader('Content-Type', 'text/javascript');
+      response.end('import {mountDocument} from "/index.js"; window.mount = options => { window.viewer?.destroy(); window.previewErrors=[]; window.viewer=mountDocument(document.querySelector("#preview"),{locale:"zh-CN",title:"Document",...options,onError:error=>window.previewErrors.push(error.message)}); }; window.ready=true;');
+      return;
+    }
+    if (fixtures.has(path)) { response.end(fixtures.get(path)); return; }
+    try {
+      const file = resolve(output, '.' + path);
+      if (!file.startsWith(output)) throw new Error('Invalid path');
+      const types = { '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm' };
+      response.setHeader('Content-Type', types[extname(path)] || 'application/octet-stream');
+      response.end(await readFile(file));
+    } catch { response.statusCode = 404; response.end('Not found'); }
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  return { server, requests, url: 'http://127.0.0.1:' + server.address().port };
+}
+
+test('legacy PPT Worker renders independently without a vendor engine', { timeout: 20000 }, async () => {
+  const { server, url } = await fixtureServer();
+  const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
+  try {
+    const page = await browser.newPage();
+    await page.goto(url);
+    await page.waitForFunction(() => window.ready);
+    await page.evaluate(() => window.mount({ src: '/report.ppt' }));
+    await page.getByRole('button', { name: '预览文档', exact: true }).click();
+    await page.waitForFunction(() => window.previewErrors.length || document.querySelector('iframe')?.contentDocument?.querySelector('svg'));
+    assert.deepEqual(await page.evaluate(() => window.previewErrors), []);
+    await page.frameLocator('iframe').getByText('First slide: 中文', { exact: true }).waitFor();
+  } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
+});
+
+test('browser renderers load only on preview, render real PDF/Office bytes, and work at mobile width', { timeout: 120000 }, async () => {
+  const { server, requests, url } = await fixtureServer();
+  const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
+  try {
+    for (const width of [320, 1280]) {
+      const context = await browser.newContext({ viewport: { width, height: 900 } });
+      const page = await context.newPage();
+      const errors = [];
+      page.on('pageerror', error => errors.push(error.message));
+      page.on('download', () => errors.push('Unexpected browser download instead of inline preview'));
+      await context.route('https://blocked.example/**', route => { errors.push('Unexpected external resource'); return route.abort(); });
+      await page.goto(url);
+      await page.waitForFunction(() => window.ready);
+      await page.evaluate(() => window.mount({ src: '/report.xlsx' }));
+      assert.ok(!requests.includes('/report.xlsx'));
+      assert.ok(!requests.some(path => /\/(?:sheets|slides|pdf|word|ppt)-/.test(path)));
+      const originalCount = requests.filter(path => path === '/report.xlsx').length;
+      await page.getByRole('button', { name: '预览文档', exact: true }).click();
+      const frame = page.frameLocator('iframe');
+      await frame.getByText('First sheet', { exact: true }).waitFor();
+      assert.equal(requests.filter(path => path === '/report.xlsx').length, originalCount + 1);
+      assert.equal(await frame.locator('img').count(), 0);
+      await page.getByRole('combobox').selectOption('Details');
+      await frame.getByText('Second sheet', { exact: true }).waitFor();
+      await page.getByRole('button', { name: '关闭预览', exact: true }).click();
+      assert.equal(await page.locator('iframe').count(), 0);
+      assert.equal(await page.getByRole('button', { name: '预览文档', exact: true }).evaluate(node => node === document.activeElement), true);
+
+      for (const [source, expected] of [['/report.docx', 'Word preview 中文'], ['/report.xls', 'First sheet'], ['/report.pptx', 'PowerPoint preview 中文'], ['/report.ppt', 'First slide: 中文']]) {
+        await page.evaluate(src => window.mount({ src }), source);
+        await page.getByRole('button', { name: '预览文档', exact: true }).click();
+        try { await page.frameLocator('iframe').getByText(expected, { exact: true }).waitFor({ timeout: 20000 }); }
+        catch (error) { throw new Error(source + ': ' + JSON.stringify(await page.evaluate(() => window.previewErrors)), { cause: error }); }
+        assert.deepEqual(await page.evaluate(() => window.previewErrors), []);
+        assert.equal(await page.locator('iframe').getAttribute('sandbox'), 'allow-same-origin');
+        if (source.endsWith('.ppt')) {
+          await page.getByRole('button', { name: '下一页', exact: true }).click();
+          await page.frameLocator('iframe').getByText('Second slide', { exact: true }).waitFor();
+        }
+        await page.getByRole('button', { name: '关闭预览', exact: true }).click();
+      }
+
+      await page.evaluate(() => window.mount({ src: '/report.pdf' }));
+      await page.getByRole('button', { name: '预览文档', exact: true }).click();
+      await page.frameLocator('iframe').getByText('Document preview page one', { exact: true }).waitFor({ timeout: 20000 });
+      await page.getByRole('button', { name: '下一页', exact: true }).click();
+      await page.frameLocator('iframe').getByText('Document preview page two', { exact: true }).waitFor();
+      await page.getByRole('button', { name: '关闭预览', exact: true }).click();
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      assert.deepEqual(await page.evaluate(() => window.previewErrors), []);
+      assert.deepEqual(errors, []);
+      requests.length = 0;
+      await context.close();
+    }
+  } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
+});
+
+test('extensionless shares, consent denial, error recovery, size limits and close during fetch', { timeout: 40000 }, async () => {
+  const { server, requests, url } = await fixtureServer();
+  const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
+  try {
+    const page = await browser.newPage();
+    await page.goto(url);
+    await page.waitForFunction(() => window.ready);
+    await page.evaluate(() => window.mount({ src: '/download/123', format: 'xlsx', canLoad: () => false }));
+    await page.getByRole('button', { name: '预览文档', exact: true }).click();
+    assert.ok(!requests.includes('/download/123'));
+    await page.evaluate(() => window.mount({ src: '/download/123', format: 'xlsx' }));
+    await page.getByRole('button', { name: '预览文档', exact: true }).click();
+    await page.frameLocator('iframe').getByText('First sheet', { exact: true }).waitFor();
+    for (const options of [{ src: '/invalid.pdf' }, { src: '/report.xlsx', maxBytes: 20 }]) {
+      await page.evaluate(options => window.mount(options), options);
+      await page.getByRole('button', { name: '预览文档', exact: true }).click();
+      await page.getByRole('status').filter({ hasText: '无法预览' }).waitFor();
+      assert.equal(await page.locator('iframe').count(), 0);
+      assert.equal((await page.evaluate(() => window.previewErrors)).length, 1);
+    }
+    let release;
+    await page.route('**/pending.pdf', async route => { await new Promise(resolve => { release = resolve; }); await route.fulfill({ body: pdfFixture() }).catch(() => {}); });
+    await page.evaluate(() => window.mount({ src: '/pending.pdf' }));
+    const requested = page.waitForRequest('**/pending.pdf');
+    await page.getByRole('button', { name: '预览文档', exact: true }).click();
+    await requested;
+    await page.getByRole('button', { name: '关闭预览', exact: true }).click();
+    release?.();
+    await page.waitForTimeout(100);
+    assert.equal(await page.locator('iframe').count(), 0);
+    assert.deepEqual(await page.evaluate(() => window.previewErrors), []);
+  } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
+});

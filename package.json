@@ -1,0 +1,23 @@
+{
+  "name": "@jsw-teams/document-viewer",
+  "version": "0.1.0",
+  "description": "Browser-only, on-demand PDF and Office previews for static websites and shared URLs.",
+  "type": "module",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/jsw-teams/document-viewer.git" },
+  "homepage": "https://github.com/jsw-teams/document-viewer#readme",
+  "engines": { "node": ">=22.13.0" },
+  "exports": { ".": "./src/index.js", "./styles": "./src/styles.css", "./assets": "./tools/assets.mjs", "./ppt": "./src/ppt/parser.js" },
+  "files": ["src", "tools", "README.md", "LICENSE", "NOTICE.md"],
+  "scripts": { "build": "node tools/build.mjs", "test": "npm run build && node --test tests/*.test.mjs" },
+  "dependencies": {
+    "@aiden0z/pptx-renderer": "1.3.0",
+    "@file-viewer/doc": "3.1.2",
+    "cfb": "1.2.2",
+    "docx-preview": "0.4.1",
+    "esbuild": "^0.28.2",
+    "pdfjs-dist": "6.4.299",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "devDependencies": { "playwright": "^1.63.0" }
+}
