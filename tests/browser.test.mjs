@@ -95,6 +95,9 @@ test('browser renderers load only on preview, render real PDF/Office bytes, and 
         catch (error) { throw new Error(source + ': ' + JSON.stringify(await page.evaluate(() => window.previewErrors)), { cause: error }); }
         assert.deepEqual(await page.evaluate(() => window.previewErrors), []);
         assert.equal(await page.locator('iframe').getAttribute('sandbox'), 'allow-same-origin');
+        if (source.endsWith('.docx')) {
+          assert.ok(await page.frameLocator('iframe').locator('section.docx').evaluate(node => node.getBoundingClientRect().width >= innerWidth * 0.8), 'Word page must use the available viewport width');
+        }
         if (source.endsWith('.ppt')) {
           await page.getByRole('button', { name: '下一页', exact: true }).click();
           await page.frameLocator('iframe').getByText('Second slide', { exact: true }).waitFor();
@@ -105,6 +108,12 @@ test('browser renderers load only on preview, render real PDF/Office bytes, and 
       await page.evaluate(() => window.mount({ src: '/report.pdf' }));
       await page.getByRole('button', { name: '预览文档', exact: true }).click();
       await page.frameLocator('iframe').getByText('Document preview page one', { exact: true }).waitFor({ timeout: 20000 });
+      assert.ok(await page.frameLocator('iframe').locator('canvas').evaluate(canvas => {
+        const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+        let ink = 0;
+        for (let offset = 0; offset < pixels.length; offset += 4) if (pixels[offset] < 128 && pixels[offset + 3]) ink++;
+        return ink > 100;
+      }), 'PDF preview must paint visible content, not only an invisible text layer');
       await page.getByRole('button', { name: '下一页', exact: true }).click();
       await page.frameLocator('iframe').getByText('Document preview page two', { exact: true }).waitFor();
       await page.getByRole('button', { name: '关闭预览', exact: true }).click();

@@ -4,7 +4,7 @@ GlobalWorkerOptions.workerSrc = new URL('../pdf.worker.js', import.meta.url).hre
 const resources = typeof __DOCUMENT_PDF_ASSETS__ === 'string' ? __DOCUMENT_PDF_ASSETS__ : '../pdf-assets/';
 
 export async function render({ data, frame, controls, signal, labels, status, setCleanup, guard }) {
-  const task = getDocument({ data, isEvalSupported: false, stopAtErrors: true,
+  const task = getDocument({ data, ownerDocument: frame.contentDocument, isEvalSupported: false, stopAtErrors: true,
     cMapUrl: new URL(resources + 'cmaps/', import.meta.url).href, cMapPacked: true,
     standardFontDataUrl: new URL(resources + 'standard_fonts/', import.meta.url).href,
     wasmUrl: new URL(resources + 'wasm/', import.meta.url).href });
