@@ -108,7 +108,11 @@ test('browser renderers load only on preview, render real PDF/Office bytes, and 
       await page.evaluate(() => window.mount({ src: '/report.pdf' }));
       await page.getByRole('button', { name: '预览文档', exact: true }).click();
       await page.frameLocator('iframe').getByText('Document preview page one', { exact: true }).waitFor({ timeout: 20000 });
-      assert.ok(await page.frameLocator('iframe').locator('canvas').evaluate(canvas => {
+      assert.ok(await page.frameLocator('iframe').locator('.pdf-page img').evaluate(image => {
+        const canvas = document.createElement('canvas');
+        canvas.width = image.naturalWidth;
+        canvas.height = image.naturalHeight;
+        canvas.getContext('2d').drawImage(image, 0, 0);
         const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
         let ink = 0;
         for (let offset = 0; offset < pixels.length; offset += 4) if (pixels[offset] < 128 && pixels[offset + 3]) ink++;

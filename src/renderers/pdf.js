@@ -11,11 +11,14 @@ export async function render({ data, frame, controls, signal, labels, status, se
   let renderTask = null;
   let textLayer = null;
   let destroyed = false;
+  let imageUrl = null;
   const cleanup = () => {
     if (destroyed) return;
     destroyed = true;
     renderTask?.cancel();
     textLayer?.cancel();
+    if (imageUrl) URL.revokeObjectURL(imageUrl);
+    imageUrl = null;
     void task.destroy().catch(() => {});
   };
   setCleanup(cleanup);
@@ -59,6 +62,22 @@ export async function render({ data, frame, controls, signal, labels, status, se
       frame.contentDocument.body.replaceChildren(wrapper);
       renderTask = page.render({ canvasContext: canvas.getContext('2d'), viewport, transform: [ratio, 0, 0, ratio, 0, 0] });
       await renderTask.promise;
+      signal.throwIfAborted();
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+      if (!blob) throw new Error('PDF page image could not be created');
+      signal.throwIfAborted();
+      if (imageUrl) URL.revokeObjectURL(imageUrl);
+      imageUrl = URL.createObjectURL(blob);
+      const painted = frame.contentDocument.createElement('img');
+      painted.alt = '';
+      painted.style.cssText = canvas.style.cssText + ';display:block';
+      const loaded = new Promise((resolve, reject) => {
+        painted.onload = resolve;
+        painted.onerror = () => reject(new Error('PDF page image could not be displayed'));
+      });
+      painted.src = imageUrl;
+      canvas.replaceWith(painted);
+      await loaded;
       signal.throwIfAborted();
       const text = frame.contentDocument.createElement('div');
       text.className = 'textLayer';
