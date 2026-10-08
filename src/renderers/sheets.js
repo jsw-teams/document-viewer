@@ -65,6 +65,7 @@ export async function render({ data, format, frame, viewport, controls, signal, 
   jump.textContent = labels.go;
   const value = document.createElement('output');
   value.setAttribute('aria-label', labels.cellValue);
+  value.tabIndex = 0;
   formulaBar.append(address, jump, value);
   controls.append(formulaBar);
   const tabs = document.createElement('div');
