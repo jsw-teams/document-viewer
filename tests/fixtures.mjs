@@ -113,6 +113,16 @@ export async function wordLayoutFixture() {
   return zip.generateAsync({ type: 'nodebuffer' });
 }
 
+export async function wordBulletFixture() {
+  const zip = await JSZip.loadAsync(await wordFixture());
+  const word = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+  const relation = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering';
+  zip.file('word/_rels/document.xml.rels', `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="numbering" Type="${relation}" Target="numbering.xml"/></Relationships>`);
+  zip.file('word/numbering.xml', `<w:numbering xmlns:w="${word}"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/><w:lvlText w:val="\uf0b7"/><w:rPr><w:rFonts w:ascii="Symbol" w:hAnsi="Symbol"/></w:rPr></w:lvl></w:abstractNum><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/><w:lvlText w:val="\uf0b7"/><w:rPr><w:rFonts w:ascii="Unrelated" w:hAnsi="Unrelated"/></w:rPr></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num><w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num></w:numbering>`);
+  zip.file('word/document.xml', `<w:document xmlns:w="${word}"><w:body><w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>Readable Symbol bullet</w:t></w:r></w:p><w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr></w:pPr><w:r><w:t>Preserved unrelated symbol</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:body></w:document>`);
+  return zip.generateAsync({ type: 'nodebuffer' });
+}
+
 export function sheetFixture(format = 'xlsx') {
   const workbook = utils.book_new();
   utils.book_append_sheet(workbook, utils.aoa_to_sheet([['First sheet', '<img src=https://blocked.example/x onerror=alert(1)>'], [42, '中文']]), 'Summary');

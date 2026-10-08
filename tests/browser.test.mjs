@@ -6,7 +6,7 @@ import { resolve, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { utils, write } from 'xlsx';
-import { pdfFixture, wordFixture, wordLayoutFixture, sheetFixture, styledSheetFixture, slidesFixture, legacyPpt } from './fixtures.mjs';
+import { pdfFixture, wordFixture, wordLayoutFixture, wordBulletFixture, sheetFixture, styledSheetFixture, slidesFixture, legacyPpt } from './fixtures.mjs';
 import JSZip from 'jszip';
 
 const output = fileURLToPath(new URL('../dist/', import.meta.url));
@@ -226,6 +226,25 @@ test('Word preserves saved pagination, page margins, styled text, headers, foote
     assert.ok(Math.abs(parseFloat(layout.width) - 816) < 0.1);
     delete layout.width;
     assert.deepEqual(layout, { weight: '700', color: 'rgb(128, 0, 32)', size: '24px', left: '120px', right: '120px' });
+    assert.deepEqual(await page.evaluate(() => window.previewErrors), []);
+  } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
+test('Word Symbol bullets render as Unicode without changing unrelated private-use glyphs', { timeout: 20000 }, async () => {
+  const { server, url } = await fixtureServer(new Map([['/bullets.docx', await wordBulletFixture()]]));
+  const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
+  try {
+    const page = await browser.newPage();
+    await page.goto(url);
+    await page.waitForFunction(() => window.ready);
+    await page.evaluate(() => window.mount({ src: '/bullets.docx', autoOpen: true }));
+    const frame = page.frameLocator('iframe');
+    await frame.getByText('Readable Symbol bullet', { exact: true }).waitFor();
+    const bullet = await frame.getByText('Readable Symbol bullet', { exact: true }).evaluate(element => getComputedStyle(element.closest('p'), '::before').content);
+    assert.ok(bullet.includes('\u2022'));
+    assert.equal(bullet.includes('\uf0b7'), false);
+    const unrelated = await frame.getByText('Preserved unrelated symbol', { exact: true }).evaluate(element => getComputedStyle(element.closest('p'), '::before').content);
+    assert.ok(unrelated.includes('\uf0b7'));
     assert.deepEqual(await page.evaluate(() => window.previewErrors), []);
   } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 });

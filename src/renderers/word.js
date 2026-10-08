@@ -1,4 +1,4 @@
-import { renderAsync } from 'docx-preview';
+import { parseAsync, renderDocument } from 'docx-preview';
 import { labelPages } from '../pages.js';
 
 export async function render({ data, frame, signal, labels, setCleanup }) {
@@ -15,12 +15,23 @@ export async function render({ data, frame, signal, labels, setCleanup }) {
   images.observe(frame.contentDocument.body, { childList: true, subtree: true });
   setCleanup(() => images.disconnect());
   try {
-    await renderAsync(data, frame.contentDocument.body, styles, {
+    const options = {
       renderAltChunks: false, useBase64URL: true, renderComments: false,
       renderChanges: false, breakPages: true, ignoreWidth: false,
       ignoreLastRenderedPageBreak: false, experimental: true,
       renderHeaders: true, renderFooters: true, renderFootnotes: true, renderEndnotes: true
-    });
+    };
+    const parsed = await parseAsync(data, options);
+    signal.throwIfAborted();
+    for (const numbering of parsed.numberingPart?.domNumberings || []) {
+      if (numbering.format !== 'bullet' || !/^["']?symbol["']?$/i.test(numbering.rStyle?.['font-family']?.trim() || '')) continue;
+      if (!numbering.levelText?.includes('\uf0b7')) continue;
+      numbering.levelText = numbering.levelText.replaceAll('\uf0b7', '\u2022');
+      numbering.rStyle['font-family'] = 'serif';
+    }
+    const nodes = await renderDocument(parsed, options);
+    signal.throwIfAborted();
+    for (const node of nodes) (node.nodeName === 'STYLE' ? styles : frame.contentDocument.body).append(node);
     markImages(frame.contentDocument.body);
   } finally { images.disconnect(); }
   frame.contentDocument.head.append(layout);
