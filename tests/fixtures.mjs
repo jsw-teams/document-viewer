@@ -16,13 +16,16 @@ function integers(...values) {
   return result;
 }
 
-export function legacyPpt({ cycle = false, brokenReference = false, encrypted = false, emptyTextBefore = false, largeAnchor = false, childAnchor = false, thinAnchor = false, inlineText = false, missingAnchor = false, outlineIndex } = {}) {
+export function legacyPpt({ cycle = false, brokenReference = false, encrypted = false, emptyTextBefore = false, largeAnchor = false, childAnchor = false, thinAnchor = false, inlineText = false, missingAnchor = false, outlineIndex, fitFlags = 0 } = {}) {
   const text = value => Buffer.concat([record(3999, integers(0)), record(4000, Buffer.from(value, 'utf16le'))]);
   const shapeProperties = record(0xf00a, integers(100, 0x800), 1);
   const anchor = Buffer.alloc(largeAnchor || childAnchor ? 16 : 8);
   const coordinates = childAnchor ? [256, 128, 4000, 800] : [128, 256, 4000, thinAnchor ? 129 : 800];
   coordinates.forEach((value, index) => anchor.length === 16 ? anchor.writeInt32LE(value, index * 4) : anchor.writeInt16LE(value, index * 2));
-  const shape = record(0xf004, Buffer.concat([shapeProperties, ...(missingAnchor ? [] : [record(childAnchor ? 0xf00f : 0xf010, anchor)]), record(0xf00d, inlineText ? text('Local textbox 中文') : record(3998, integers(outlineIndex ?? (emptyTextBefore ? 1 : 0))), 0, true)]), 0, true);
+  const option = Buffer.alloc(6);
+  option.writeUInt16LE(191);
+  option.writeUInt32LE(fitFlags, 2);
+  const shape = record(0xf004, Buffer.concat([shapeProperties, record(0xf00b, option, 1), ...(missingAnchor ? [] : [record(childAnchor ? 0xf00f : 0xf010, anchor)]), record(0xf00d, inlineText ? text('Local textbox 中文') : record(3998, integers(outlineIndex ?? (emptyTextBefore ? 1 : 0))), 0, true)]), 0, true);
   const first = record(1006, record(1036, record(0xf002, shape, 0, true), 0, true), 0, true);
   const second = record(1006, Buffer.alloc(0), 0, true);
   const list = record(4080, Buffer.concat([

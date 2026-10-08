@@ -13,7 +13,7 @@ async function fixtureServer(provided = new Map()) {
   const fixtures = new Map([
     ['/report.pdf', pdfFixture()], ['/report.docx', await wordFixture()],
     ['/report.xlsx', sheetFixture()], ['/report.xls', sheetFixture('xls')],
-    ['/report.pptx', await slidesFixture()], ['/report.ppt', legacyPpt()], ['/thin.ppt', legacyPpt({ thinAnchor: true })],
+    ['/report.pptx', await slidesFixture()], ['/report.ppt', legacyPpt()], ['/thin.ppt', legacyPpt({ thinAnchor: true })], ['/fit.ppt', legacyPpt({ thinAnchor: true, fitFlags: 0x40004 })],
     ['/download/123', sheetFixture()], ['/invalid.pdf', Buffer.from('Not a PDF')]
   ]);
   for (const [path, bytes] of provided) fixtures.set(path, bytes);
@@ -121,6 +121,10 @@ test('legacy PPT Worker renders independently without a vendor engine', { timeou
     assert.ok(await transcript.evaluate(node => node.getBoundingClientRect().height >= 16));
     assert.equal(await page.frameLocator('iframe').locator('[data-document-page]').count(), 2);
     assert.equal(await page.getByRole('button', { name: '下一页', exact: true }).count(), 0);
+    await page.evaluate(() => window.mount({ src: '/fit.ppt', autoOpen: true }));
+    const positioned = page.frameLocator('iframe').locator('foreignObject').getByText('First slide: 中文', { exact: true });
+    await positioned.waitFor();
+    assert.ok(await positioned.evaluate(node => node.getBoundingClientRect().height >= 16));
   } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
 });
 

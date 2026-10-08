@@ -23,6 +23,8 @@ This implementation follows the current persist-directory/edit chain and active 
 
 Specifications: [MS-PPT RectStruct](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-ppt/8a58e3ae-2682-42d0-82cd-a41c2999584e), [SmallRectStruct](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-ppt/e47cb973-8480-4995-90b2-008bcb2ffc65) and [OfficeArtClientTextbox](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-ppt/f50070dd-a4dc-4edd-a446-c4fcc5c80ace).
 
+The explicit `fUsefFitShapeToText` / `fFitShapeToText` flags in [MS-ODRAW Text Boolean Properties](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-odraw/ab9e4283-a47f-429c-8c2b-683a3a7f16d1) expand text boxes to measured text height within the slide. A thin stored anchor is not treated as a fixed clipping rectangle when these flags request autofit.
+
 ## Continuous pages
 
 Documents scroll through separated, numbered pages rather than previous/next controls. Word uses authored page breaks, presentations use slide boundaries, and spreadsheets split the selected worksheet into 50-row pages while retaining worksheet tabs. PDF pages render near the scroll viewport and release distant rasters when the cache exceeds eight pages or 32 million pixels. The sandbox stays script-disabled; renderers and observers run in the parent page. Legacy Word HTML is parsed into an inert template and stripped of executable elements and event attributes before insertion.

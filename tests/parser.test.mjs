@@ -33,6 +33,7 @@ test('MS-PPT client rectangles differ from MS-ODRAW child anchors and local text
     assert.deepEqual(slide.texts.map(item => item.text), ['First slide: 中文', 'Local textbox 中文']);
   }
   for (const outlineIndex of [-1, 99]) assert.throws(() => parsePpt(legacyPpt({ outlineIndex })), /outline text reference/);
+  for (const fitFlags of [0, 4, 0x40000, 0x40004]) assert.equal(parsePpt(legacyPpt({ fitFlags })).slides[0].shapes[0].fitShapeToText, fitFlags === 0x40004);
 });
 
 test('direct URLs support query strings and extensionless shares but reject unsafe sources', () => {

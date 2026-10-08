@@ -191,6 +191,7 @@ function shapes(stream, slide, texts, state, scheme) {
     result.push({ type: properties.instance, left, top, width: Math.max(0, right - left), height: Math.max(0, bottom - top),
       fill: color(values.get(385), scheme, 'transparent'), stroke: color(values.get(448), scheme, 'transparent'),
       rotation: (values.get(4) | 0) / 65536, image: values.get(260) || null,
+      fitShapeToText: ((values.get(191) || 0) & 0x40004) === 0x40004,
       background: !!(flags & 0x400), texts: content });
     if (result.length > 4096) throw new Error('Too many PPT shapes');
   }

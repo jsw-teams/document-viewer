@@ -56,14 +56,15 @@ export async function render({ data, frame, controls, signal, labels, status, se
       } else if ([1, 2, 202].includes(shape.type) || shape.background) {
         group.append(create('rect', { ...common, x: shape.left, y: shape.top, width: shape.width, height: shape.height, rx: shape.type === 2 ? Math.min(shape.width, shape.height) / 10 : 0 }));
       }
-      if (shape.texts.length && shape.width >= presentation.width / 30 && shape.height >= presentation.width / 30 && shape.left >= 0 && shape.top >= 0 && shape.left + shape.width <= presentation.width && shape.top + shape.height <= presentation.height) {
-        const box = create('foreignObject', { x: shape.left, y: shape.top, width: shape.width, height: shape.height });
+      const textHeight = shape.fitShapeToText ? presentation.height - shape.top : shape.height;
+      if (shape.texts.length && shape.width >= presentation.width / 30 && textHeight >= presentation.width / 30 && shape.left >= 0 && shape.top >= 0 && shape.left + shape.width <= presentation.width && shape.top + textHeight <= presentation.height) {
+        const box = create('foreignObject', { x: shape.left, y: shape.top, width: shape.width, height: textHeight });
         const text = frame.contentDocument.createElementNS('http://www.w3.org/1999/xhtml', 'div');
         text.style.cssText = `font:${presentation.width / 30}px system-ui;white-space:pre-wrap;overflow-wrap:anywhere;color:#222;padding:8px;box-sizing:border-box`;
         text.textContent = shape.texts.map(item => item.text).join('\n');
         box.append(text);
         group.append(box);
-        positioned.set(box, shape.texts);
+        positioned.set(box, shape);
       }
       svg.append(group);
     }
@@ -71,8 +72,16 @@ export async function render({ data, frame, controls, signal, labels, status, se
     frame.contentDocument.body.append(page);
     for (const box of svg.querySelectorAll('foreignObject')) {
       const text = box.firstElementChild;
+      const shape = positioned.get(box);
       if (text.scrollHeight <= box.height.baseVal.value && text.scrollWidth <= box.width.baseVal.value) {
-        for (const item of positioned.get(box)) represented.add(item.text);
+        if (shape.fitShapeToText) {
+          const height = Math.max(shape.height, text.scrollHeight);
+          box.setAttribute('height', String(height));
+          const rectangle = box.parentElement.querySelector('rect');
+          if (rectangle) rectangle.setAttribute('height', String(height));
+          box.parentElement.setAttribute('transform', `rotate(${shape.rotation} ${shape.left + shape.width / 2} ${shape.top + height / 2})`);
+        }
+        for (const item of shape.texts) represented.add(item.text);
       } else box.remove();
     }
     const transcript = frame.contentDocument.createElement('section');
