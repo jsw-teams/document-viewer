@@ -9,13 +9,14 @@ import { pdfFixture, wordFixture, sheetFixture, slidesFixture, legacyPpt } from 
 
 const output = fileURLToPath(new URL('../dist/', import.meta.url));
 
-async function fixtureServer() {
+async function fixtureServer(provided = new Map()) {
   const fixtures = new Map([
     ['/report.pdf', pdfFixture()], ['/report.docx', await wordFixture()],
     ['/report.xlsx', sheetFixture()], ['/report.xls', sheetFixture('xls')],
     ['/report.pptx', await slidesFixture()], ['/report.ppt', legacyPpt()],
     ['/download/123', sheetFixture()], ['/invalid.pdf', Buffer.from('Not a PDF')]
   ]);
+  for (const [path, bytes] of provided) fixtures.set(path, bytes);
   const requests = [];
   const server = createServer(async (request, response) => {
     const path = new URL(request.url, 'http://local.invalid').pathname;
@@ -30,6 +31,11 @@ async function fixtureServer() {
     if (path === '/fixture.js') {
       response.setHeader('Content-Type', 'text/javascript');
       response.end('import {mountDocument} from "/index.js"; window.mount = options => { window.viewer?.destroy(); window.previewErrors=[]; window.viewer=mountDocument(document.querySelector("#preview"),{locale:"zh-CN",title:"Document",...options,onError:error=>window.previewErrors.push(error.message)}); }; window.ready=true;');
+      return;
+    }
+    if (path === '/axe.js') {
+      response.setHeader('Content-Type', 'text/javascript');
+      response.end(await readFile(new URL('../node_modules/axe-core/axe.min.js', import.meta.url)));
       return;
     }
     if (fixtures.has(path)) { response.end(fixtures.get(path)); return; }
@@ -60,6 +66,112 @@ test('legacy PPT Worker renders independently without a vendor engine', { timeou
   } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
 });
 
+test('themed worksheet controls support keyboard, contrast, forced colors and sandbox Escape', { timeout: 60000 }, async () => {
+  const { server, url } = await fixtureServer();
+  const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
+  try {
+    for (const width of [320, 1280]) {
+      const page = await browser.newPage({ viewport: { width, height: 900 } });
+      page.setDefaultTimeout(10000);
+      await page.goto(url);
+      await page.waitForFunction(() => window.ready);
+      await page.evaluate(() => {
+        document.body.style.cssText = '--paper:#f7f8ff;--panel:#fff;--ink:#171a35;--muted:#5e6480;--line:#dce0f2;--accent:#3945c6;font:16px/1.75 system-ui';
+        window.mount({ src: '/report.xlsx' });
+      });
+      const preview = page.getByRole('button', { name: '预览文档', exact: true });
+      assert.equal(await preview.getAttribute('aria-expanded'), 'false');
+      await preview.click();
+      await page.frameLocator('iframe').getByText('First sheet', { exact: true }).waitFor();
+      assert.equal(await page.locator('select').count(), 0);
+      const first = page.getByRole('tab').first();
+      const last = page.getByRole('tab', { name: 'Details', exact: true });
+      await first.focus();
+      await page.keyboard.press('ArrowRight');
+      assert.equal(await last.getAttribute('aria-selected'), 'true');
+      assert.equal(await last.evaluate(element => element === document.activeElement), true);
+      await page.frameLocator('iframe').getByText('Second sheet', { exact: true }).waitFor();
+      await page.keyboard.press('Home');
+      assert.equal(await first.getAttribute('aria-selected'), 'true');
+      await page.keyboard.press('End');
+      assert.equal(await last.getAttribute('aria-selected'), 'true');
+      assert.equal(await page.getByRole('tabpanel').getAttribute('aria-labelledby'), await last.getAttribute('id'));
+      assert.equal(await first.evaluate(element => getComputedStyle(element).appearance), 'none');
+      const content = page.frames().find(frame => frame.parentFrame());
+      await page.addScriptTag({ url: url + '/axe.js' });
+      for (const mode of ['light', 'dark', 'custom']) {
+        if (mode === 'dark') await page.evaluate(() => {
+          document.body.style.cssText = '--paper:#16182a;--panel:#23263c;--ink:#eef0ff;--muted:#b9c0dc;--line:#68708b;--accent:#abb2ff;font:16px/1.75 system-ui;color-scheme:dark';
+        });
+        if (mode === 'custom') await page.evaluate(() => {
+          document.body.style.cssText = 'background:#ffff00;color:#002a49;font:16px/1.75 Georgia';
+          const link = document.createElement('a');
+          link.href = '#example';
+          link.textContent = 'Host theme link';
+          document.body.prepend(link);
+          const stylesheet = document.createElement('style');
+          stylesheet.id = 'host-palette';
+          stylesheet.textContent = 'body>a{color:#ffd166}';
+          document.head.append(stylesheet);
+        });
+        const expected = { light: 'rgb(23, 26, 53)', dark: 'rgb(238, 240, 255)', custom: 'rgb(0, 42, 73)' }[mode];
+        await page.waitForFunction(color => getComputedStyle(document.querySelector('iframe').contentDocument.body).color === color, expected, { timeout: 5000 });
+        if (mode === 'custom') {
+          assert.equal(await content.locator('body').evaluate(element => getComputedStyle(element).backgroundColor), 'rgb(255, 255, 0)');
+          assert.equal(await last.evaluate(element => getComputedStyle(element).backgroundColor), 'rgb(255, 209, 102)');
+          await page.evaluate(() => { document.querySelector('#host-palette').textContent = 'body>a{color:#7a137a}'; });
+          await page.waitForFunction(() => getComputedStyle(document.querySelector('[aria-selected=true]')).backgroundColor === 'rgb(122, 19, 122)', { timeout: 5000 });
+        }
+        const audit = async scope => scope.evaluate(async () => {
+          const result = await axe.run(document.querySelector('.document-viewer'), { iframes: false, runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'] } });
+          return result.violations.map(issue => ({ id: issue.id, nodes: issue.nodes.map(node => node.failureSummary) }));
+        });
+        assert.deepEqual(await audit(page), [], 'Parent controls at ' + width + 'px / ' + mode);
+        assert.ok(await content.locator('th[scope=col]').count());
+        assert.ok(await content.locator('th[scope=row]').count());
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+        assert.ok(await last.evaluate(element => element.getBoundingClientRect().height >= 44));
+      }
+      await page.emulateMedia({ forcedColors: 'active' });
+      await last.focus();
+      assert.notEqual(await last.evaluate(element => getComputedStyle(element).outlineStyle), 'none');
+      await content.locator('body').evaluate(element => { element.tabIndex = 0; element.focus(); });
+      await page.keyboard.press('Escape');
+      assert.equal(await page.locator('iframe').count(), 0);
+      assert.equal(await preview.getAttribute('aria-expanded'), 'false');
+      assert.equal(await preview.evaluate(element => element === document.activeElement), true);
+      await page.close();
+    }
+  } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
+test('operator-provided Office samples render without downloads', { timeout: 120000, skip: !process.env.DOCUMENT_VIEWER_SAMPLES }, async () => {
+  const names = ['sample-document-medium.doc', 'sample-document-medium.docx', 'sample-document.ppt', 'sample-presentation-10-slides.pptx', 'sample-spreadsheet-100-rows.xls', 'sample-spreadsheet-100-rows.xlsx'];
+  const samples = new Map(await Promise.all(names.map(async name => ['/' + name, await readFile(resolve(process.env.DOCUMENT_VIEWER_SAMPLES, name))])));
+  const { server, url } = await fixtureServer(samples);
+  const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
+  try {
+    const page = await browser.newPage();
+    page.setDefaultTimeout(20000);
+    const errors = [];
+    page.on('download', () => errors.push('Unexpected download'));
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(url);
+    await page.waitForFunction(() => window.ready);
+    for (const name of names) {
+      await page.evaluate(src => window.mount({ src }), '/' + name);
+      await page.getByRole('button', { name: '预览文档', exact: true }).click();
+      await page.waitForFunction(() => window.previewErrors.length || document.querySelector('.document-viewer-viewport')?.getAttribute('aria-busy') === 'false');
+      assert.deepEqual(await page.evaluate(() => window.previewErrors), [], name);
+      const text = await page.frameLocator('iframe').locator('body').innerText();
+      console.log(name + ': ' + text.slice(0, 180).replaceAll('\n', ' '));
+      assert.ok(text.length > 20, 'Expected real document content: ' + name);
+      await page.getByRole('button', { name: '关闭预览', exact: true }).click();
+    }
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
 test('browser renderers load only on preview, render real PDF/Office bytes, and work at mobile width', { timeout: 120000 }, async () => {
   const { server, requests, url } = await fixtureServer();
   const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
@@ -82,7 +194,7 @@ test('browser renderers load only on preview, render real PDF/Office bytes, and 
       await frame.getByText('First sheet', { exact: true }).waitFor();
       assert.equal(requests.filter(path => path === '/report.xlsx').length, originalCount + 1);
       assert.equal(await frame.locator('img').count(), 0);
-      await page.getByRole('combobox').selectOption('Details');
+      await page.getByRole('tab', { name: 'Details', exact: true }).click();
       await frame.getByText('Second sheet', { exact: true }).waitFor();
       await page.getByRole('button', { name: '关闭预览', exact: true }).click();
       assert.equal(await page.locator('iframe').count(), 0);

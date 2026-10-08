@@ -3,6 +3,7 @@ import { documentLabels } from './language.js';
 import { documentFrame } from './frame.js';
 import { readDocument } from './read.js';
 import { validateOfficeZip } from './zip-limits.js';
+import { followTheme } from './theme.js';
 
 export { documentFormat, documentUrl, documentLabels };
 
@@ -15,6 +16,8 @@ const renderers = {
   xlsx: () => import('./renderers/sheets.js'),
   xls: () => import('./renderers/sheets.js')
 };
+
+let viewerId = 0;
 
 export function mountDocument(container, options) {
   const source = documentUrl(options.src, document.baseURI);
@@ -37,10 +40,13 @@ export function mountDocument(container, options) {
   status.className = 'document-viewer-status';
   const viewport = document.createElement('div');
   viewport.className = 'document-viewer-viewport';
+  viewport.id = 'document-viewport-' + ++viewerId;
   viewport.hidden = true;
   const previewButton = document.createElement('button');
   previewButton.type = 'button';
   previewButton.textContent = labels.preview;
+  previewButton.setAttribute('aria-controls', viewport.id);
+  previewButton.setAttribute('aria-expanded', 'false');
   const closeButton = document.createElement('button');
   closeButton.type = 'button';
   closeButton.textContent = labels.close;
@@ -54,6 +60,7 @@ export function mountDocument(container, options) {
   toolbar.append(previewButton, closeButton, download);
   root.append(heading, toolbar, status, viewport);
   container.replaceChildren(root);
+  const stopTheme = followTheme(root, container);
   const controls = document.createElement('div');
   controls.className = 'document-viewer-controls';
   let active = null;
@@ -68,8 +75,13 @@ export function mountDocument(container, options) {
     controls.remove();
     viewport.replaceChildren();
     viewport.hidden = true;
+    viewport.removeAttribute('aria-busy');
+    viewport.removeAttribute('role');
+    viewport.removeAttribute('aria-labelledby');
+    viewport.removeAttribute('tabindex');
     closeButton.hidden = true;
     previewButton.hidden = false;
+    previewButton.setAttribute('aria-expanded', 'false');
     status.textContent = '';
     if (restoreFocus && !disposed) previewButton.focus();
   }
@@ -80,6 +92,7 @@ export function mountDocument(container, options) {
     active = session;
     const signal = session.controller.signal;
     previewButton.hidden = true;
+    previewButton.setAttribute('aria-expanded', 'true');
     closeButton.hidden = false;
     viewport.hidden = false;
     viewport.setAttribute('aria-busy', 'true');
@@ -94,8 +107,11 @@ export function mountDocument(container, options) {
         readDocument(preview.href, signal, maxBytes), renderers[format](), documentFrame(viewport, title, signal)
       ]);
       signal.throwIfAborted();
+      frame.contentDocument.addEventListener('keydown', event => {
+        if (event.key === 'Escape') { event.preventDefault(); close(); }
+      }, { signal });
       if (['docx', 'pptx', 'xlsx'].includes(format)) validateOfficeZip(data);
-      const cleanup = await renderer.render({ data, frame, controls, signal, labels, status,
+      const cleanup = await renderer.render({ data, frame, viewport, controls, signal, labels, status,
         setCleanup: callback => { session.cleanup = callback; }, guard });
       if (active !== session) { cleanup?.(); return; }
       session.cleanup = cleanup;
@@ -112,6 +128,6 @@ export function mountDocument(container, options) {
 
   previewButton.addEventListener('click', open);
   closeButton.addEventListener('click', () => close());
-  root.addEventListener('keydown', event => { if (event.key === 'Escape' && active) close(); });
-  return { open, close, destroy() { disposed = true; close(false); root.remove(); } };
+  root.addEventListener('keydown', event => { if (event.key === 'Escape' && active) { event.preventDefault(); close(); } });
+  return { open, close, destroy() { disposed = true; close(false); stopTheme(); root.remove(); } };
 }

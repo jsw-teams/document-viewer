@@ -19,5 +19,5 @@
     "pdfjs-dist": "6.4.299",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
-  "devDependencies": { "playwright": "^1.63.0" }
+  "devDependencies": { "axe-core": "4.13.0", "playwright": "^1.63.0" }
 }

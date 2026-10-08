@@ -44,6 +44,12 @@ const viewer = mountDocument(document.querySelector('#preview'), {
 
 Load `styles.css` alongside the library. The default preview button performs the fetch; mounting performs no document or vendor requests. `viewer.close()` aborts fetches and releases rendering resources; `viewer.destroy()` also removes the component.
 
+### Theme and accessibility
+
+Controls are locally styled, not native browser selectors. The component automatically follows the host's font, text, nearest opaque background and link colors, including sites without EdgePress theme variables. Common background/foreground/primary/surface variables are also recognized; `--document-viewer-*` variables allow explicit overrides. Accent text and focus colors are chosen for contrast rather than assuming every accent is dark. The sandbox synchronizes the palette when ancestor theme classes/styles, stylesheet content or the system color scheme change. Worksheet tables use the site palette, while Word, PDF and slide pages preserve their document colors.
+
+Worksheet tabs support Left/Right, Home/End and roving keyboard focus, with selected state and a labeled panel. Tables expose row and column coordinates to assistive technology. Controls have 44 px minimum targets, visible focus and forced-colors support. Loading, errors and page positions are announced. Escape closes the preview even from inside the sandbox and restores focus to Preview. Integration tests check narrow layouts, light/dark palettes and WCAG contrast with axe; the host remains responsible for accessible theme colors.
+
 ## Shared URLs
 
 ```js
