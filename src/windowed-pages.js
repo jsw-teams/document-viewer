@@ -9,6 +9,12 @@ export async function windowDocumentPages(frame, signal) {
   let stopped = false;
   let running = false;
   let observer;
+  const activateImages = page => {
+    for (const image of page.querySelectorAll('image[data-document-image-url]')) {
+      const address = image.getAttribute('data-document-image-url');
+      if (address.startsWith('blob:') && new URL(address.slice(5)).origin === location.origin) image.setAttribute('href', address);
+    }
+  };
   const cleanup = () => { stopped = true; observer?.disconnect(); source.clear(); nearby.clear(); mounted.clear(); };
   signal.addEventListener('abort', cleanup, { once: true });
   try {
@@ -22,7 +28,7 @@ export async function windowDocumentPages(frame, signal) {
       signal.throwIfAborted();
       page.style.minHeight = height + 'px';
       page.style.boxSizing = 'border-box';
-      if (rectangle.bottom >= -200 && rectangle.top <= frame.clientHeight + 200) { mounted.add(index); nearby.add(index); }
+      if (rectangle.bottom >= -200 && rectangle.top <= frame.clientHeight + 200) { activateImages(page); mounted.add(index); nearby.add(index); }
       else { page.replaceChildren(); page.setAttribute('aria-busy', 'true'); }
     }
     async function update() {
@@ -42,6 +48,7 @@ export async function windowDocumentPages(frame, signal) {
           if (stopped) break;
           if (!nearby.has(index)) continue;
           pages[index].replaceChildren(inertDocumentHtml(doc, html));
+          activateImages(pages[index]);
           pages[index].setAttribute('aria-busy', 'false');
           mounted.add(index);
         }

@@ -46,7 +46,7 @@ export async function render({ data, frame, controls, signal, labels, status, se
       const group = create('g', { transform: `rotate(${shape.rotation} ${shape.left + shape.width / 2} ${shape.top + shape.height / 2})` });
       const common = { fill: shape.fill, stroke: shape.stroke, 'stroke-width': presentation.width / 700 };
       if (shape.image && images[shape.image - 1]) {
-        group.append(create('image', { href: images[shape.image - 1], x: shape.left, y: shape.top, width: shape.width, height: shape.height, preserveAspectRatio: 'xMidYMid meet' }));
+        group.append(create('image', { 'data-document-image-url': images[shape.image - 1], x: shape.left, y: shape.top, width: shape.width, height: shape.height, preserveAspectRatio: 'xMidYMid meet' }));
       } else if (shape.type === 3) {
         group.append(create('ellipse', { ...common, cx: shape.left + shape.width / 2, cy: shape.top + shape.height / 2, rx: shape.width / 2, ry: shape.height / 2 }));
       } else if (shape.type === 5) {
