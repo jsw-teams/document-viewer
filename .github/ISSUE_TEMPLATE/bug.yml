@@ -1,0 +1,31 @@
+name: Bug report
+description: Help us reproduce a problem. No private data or security exploits.
+body:
+  - type: markdown
+    attributes:
+      value: "Curiosity and AI-assisted exploration are welcome. For vulnerabilities, use SECURITY.md instead. Search existing issues first."
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: Steps, a public fixture or a small sanitized example; never attach secrets or personal documents.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Commit/version, Node/browser/OS and relevant platform.
+    validations:
+      required: true
+  - type: textarea
+    id: checks
+    attributes:
+      label: Checks and evidence
+      description: Exact commands/results, sanitized logs/screenshots, and anything not yet verified.

@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Private security report
+    url: mailto:helper@js.gripe
+    about: Report vulnerabilities privately; include the project name.

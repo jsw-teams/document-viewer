@@ -1,5 +1,11 @@
 # Document viewer development
 
+## Open collaboration
+
+- Welcome curiosity, Vibe Coding and AI-assisted contributions without tool restrictions. Review understandable changes and actual verification, not how code was produced. Follow CONTRIBUTING.md and report vulnerabilities privately via SECURITY.md.
+- Keep PRs focused, add relevant regression coverage, preserve public/legacy contracts and third-party attribution, and report unrun checks honestly. Never deploy or change production data/routes/storage as contribution verification. Untrusted PR CI must not receive deployment secrets.
+
+
 - Keep this a reusable browser-only library. No LibreOffice, conversion servers, accounts, uploads, analytics, CDN runtime or browser persistent storage.
 - Read-only Office-style controls must be theme-matched semantic controls, with one title, accessible worksheet tabs, cell/value inspection and no fake editing ribbon. Never restore row/column truncation as a memory strategy. Evict distant rendering resources, cancel stale work and distinguish bounded rendering from format-specific initial parse/source-memory requirements in documentation and tests.
 - Use continuous separated pages, not previous/next document buttons. Preserve readable text when a legacy PPT shape cannot display it. Parse untrusted HTML in an offscreen inert document before importing sanitized nodes into the script-disabled frame; never grant allow-scripts to suppress warnings.

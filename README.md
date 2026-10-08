@@ -1,5 +1,7 @@
 # document-viewer
 
+Curious about improving this project? Vibe Coding and AI-assisted contributions are welcome, with no tool restrictions. Start with [Contributing](CONTRIBUTING.md), follow [AGENTS.md](AGENTS.md), and share a small, understandable change with reproducible tests. [Report a bug or idea](https://github.com/jsw-teams/document-viewer/issues/new/choose) · [Security](SECURITY.md) · [License](LICENSE).
+
 Browser-only inline document previews for static sites and shared document URLs. Cloud builds require only Node.js and `npm ci`; no LibreOffice, Office installation or conversion backend is used.
 
 ## Supported formats
