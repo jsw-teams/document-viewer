@@ -119,8 +119,8 @@ test('themed worksheet controls support keyboard, contrast, forced colors and sa
         if (mode === 'custom') {
           assert.equal(await content.locator('body').evaluate(element => getComputedStyle(element).backgroundColor), 'rgb(255, 255, 0)');
           assert.equal(await last.evaluate(element => getComputedStyle(element).backgroundColor), 'rgb(255, 209, 102)');
-          await page.evaluate(() => { document.querySelector('#host-palette').textContent = 'body>a{color:#7a137a}'; });
-          await page.waitForFunction(() => getComputedStyle(document.querySelector('[aria-selected=true]')).backgroundColor === 'rgb(122, 19, 122)', { timeout: 5000 });
+          await page.evaluate(() => { document.querySelector('#host-palette').textContent = 'body>a{color:rgba(30,30,30,.2)}'; });
+          await page.waitForFunction(() => getComputedStyle(document.querySelector('[aria-selected=true]')).backgroundColor === 'rgba(30, 30, 30, 0.2)', null, { timeout: 5000 });
         }
         const audit = async scope => scope.evaluate(async () => {
           const result = await axe.run(document.querySelector('.document-viewer'), { iframes: false, runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'] } });

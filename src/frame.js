@@ -24,7 +24,7 @@ export async function documentFrame(container, title, signal) {
   };
   synchronize();
   const observer = new MutationObserver(synchronize);
-  for (let ancestor = container; ancestor; ancestor = ancestor.parentElement) observer.observe(ancestor, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] });
+  for (let ancestor = container; ancestor; ancestor = ancestor.parentElement) observer.observe(ancestor, { attributes: true });
   const media = matchMedia('(prefers-color-scheme: dark)');
   media.addEventListener('change', synchronize);
   signal.addEventListener('abort', () => { observer.disconnect(); media.removeEventListener('change', synchronize); }, { once: true });
