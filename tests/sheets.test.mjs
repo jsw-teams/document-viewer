@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import JSZip from 'jszip';
 import { utils, write } from 'xlsx';
 import { workbookSource, sheetInfo, sheetWindow } from '../src/sheets/model.js';
-import { sheetFixture } from './fixtures.mjs';
+import { sheetFixture, styledSheetFixture } from './fixtures.mjs';
+import { spreadsheetColor } from '../src/sheets/styles.js';
 import { cellAddress, columnName, xmlText } from '../src/sheets/xml.js';
 
 test('worksheet source windows retain all rows and columns without building a full cell model', async () => {
@@ -12,7 +13,7 @@ test('worksheet source windows retain all rows and columns without building a fu
   utils.book_append_sheet(workbook, sheet, 'Large');
   const source = await workbookSource(write(workbook, { type: 'array', bookType: 'xlsx', bookSST: true, compression: true }), 'xlsx');
   assert.equal(source.Sheets, undefined);
-  assert.deepEqual(await sheetInfo(source, 0), { rows: 5001, columns: 128, merges: sheet['!merges'], columnWidth: 64, columnWidths: {} });
+  assert.deepEqual(await sheetInfo(source, 0), { rows: 5001, columns: 128, merges: sheet['!merges'], columnWidth: 64, columnWidths: {}, rowHeight: 20, rowHeights: {}, hiddenRows: [], hiddenColumns: [], columnStyles: {}, rowStyles: {}, defaultStyle: source.styles[0], gridLines: true });
   const tail = await sheetWindow(source, 0, { startRow: 5000, endRow: 5000, startColumn: 127, endColumn: 127 });
   assert.equal(tail.length, 1);
   assert.equal(tail[0].text, 'Beyond old limits 中文');
@@ -66,4 +67,42 @@ test('worksheet geometry preserves stored column widths and rejects unsafe dimen
   zip.file('xl/worksheets/sheet1.xml', '<worksheet><dimension ref="A1:B2"/><cols><col min="1" max="2" width="NaN"/></cols><sheetData/></worksheet>');
   const source = await workbookSource(await zip.generateAsync({ type: 'uint8array' }), 'xlsx');
   await assert.rejects(sheetInfo(source, 0), /column width/);
+});
+
+test('Open XML restores theme fonts, tint, borders, rich text, hidden geometry and inherited formats', async () => {
+  const source = await workbookSource(await styledSheetFixture(), 'xlsx');
+  const info = await sheetInfo(source, 0);
+  assert.deepEqual(info.hiddenColumns, [1]);
+  assert.deepEqual(info.hiddenRows, [1]);
+  assert.equal(info.rowHeight, 24);
+  assert.ok(Math.abs(info.rowHeights[0] - 32 * 96 / 72) < 0.001);
+  assert.equal(info.gridLines, false);
+  const cells = await sheetWindow(source, 0, { startRow: 0, endRow: 4, startColumn: 0, endColumn: 4, columnStyles: info.columnStyles });
+  const cell = (row, column) => cells.find(entry => entry.row === row && entry.column === column);
+  assert.equal(cell(0, 2).text, '4.50');
+  assert.equal(cell(0, 2).style.font, 'Georgia');
+  assert.equal(cell(0, 2).style.background, '#70a0cf');
+  assert.deepEqual(cell(0, 2).style.borders.bottom, { style: 'double', color: '#ff0000' });
+  assert.equal(cell(0, 0).runs[0].style.color, '#ff0000');
+  assert.equal(cell(0, 0).runs[0].style.bold, true);
+  assert.equal(cell(3, 2).style.bold, true);
+  assert.equal(cell(3, 3).style.font, 'Arial');
+  assert.equal(cell(4, 0).text, '30');
+  assert.equal(cell(0, 4).text, '20');
+  assert.equal(cell(1, 4).text, '40');
+  const remote = await sheetWindow(source, 0, { startRow: 1, endRow: 1, startColumn: 4, endColumn: 4 });
+  assert.equal(remote[0].formula, 'D2*2');
+  assert.equal(remote[0].text, '40');
+  assert.equal(spreadsheetColor({ rgb: 'FF204060', tint: -0.5 }), '#102030');
+});
+
+test('hidden worksheets remain calculation dependencies without exposing hidden tabs or corrupting scoped names', async () => {
+  const zip = await JSZip.loadAsync(sheetFixture());
+  const workbook = await zip.file('xl/workbook.xml').async('string');
+  zip.file('xl/workbook.xml', workbook.replace('name="Details"', 'name="Details" state="veryHidden"'));
+  zip.file('xl/worksheets/sheet1.xml', '<worksheet><dimension ref="A1"/><sheetData><row r="1"><c r="A1"><f>SUM(Details!A1,40)</f></c></row></sheetData></worksheet>');
+  zip.file('xl/worksheets/sheet2.xml', '<worksheet><dimension ref="A1"/><sheetData><row r="1"><c r="A1"><v>50</v></c></row></sheetData></worksheet>');
+  const source = await workbookSource(await zip.generateAsync({ type: 'uint8array' }), 'xlsx');
+  assert.deepEqual(source.names, ['Summary']);
+  assert.equal((await sheetWindow(source, 0, { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 }))[0].text, '90');
 });

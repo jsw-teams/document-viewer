@@ -30,8 +30,10 @@ export function mountDocument(container, options) {
   const title = String(options.title || decodeURIComponent(source.pathname.split('/').pop()) || format.toUpperCase());
   const maxBytes = options.maxBytes ?? (format === 'pdf' ? 1024 : 50) * 1024 * 1024;
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new Error('maxBytes must be a positive integer');
-  const root = document.createElement('section');
+  const root = document.createElement('dialog');
   root.className = 'document-viewer';
+  root.open = true;
+  root.setAttribute('role', 'region');
   root.dataset.format = format;
   root.setAttribute('aria-label', title);
   const heading = document.createElement('strong');
@@ -64,7 +66,13 @@ export function mountDocument(container, options) {
   closeButton.type = 'button';
   closeButton.textContent = labels.close;
   closeButton.hidden = true;
-  toolbar.append(previewButton, closeButton);
+  const expandButton = document.createElement('button');
+  expandButton.type = 'button';
+  expandButton.className = 'document-viewer-expand';
+  expandButton.textContent = labels.expand;
+  expandButton.setAttribute('aria-expanded', 'false');
+  expandButton.hidden = true;
+  toolbar.append(previewButton, closeButton, expandButton);
   root.append(header, toolbar, status, viewport);
   container.replaceChildren(root);
   const stopTheme = followTheme(root, container);
@@ -72,8 +80,40 @@ export function mountDocument(container, options) {
   controls.className = 'document-viewer-controls';
   let active = null;
   let disposed = false;
+  let expanded = false;
+  let previousOverflow = '';
+
+  function collapse(restoreFocus = true) {
+    if (!expanded) return;
+    expanded = false;
+    root.close();
+    root.open = true;
+    root.removeAttribute('data-expanded');
+    root.setAttribute('role', 'region');
+    root.removeAttribute('aria-modal');
+    expandButton.textContent = labels.expand;
+    expandButton.setAttribute('aria-expanded', 'false');
+    document.documentElement.style.overflow = previousOverflow;
+    if (restoreFocus && !disposed) expandButton.focus({ preventScroll: true });
+  }
+  expandButton.addEventListener('click', () => {
+    if (expanded) { collapse(); return; }
+    previousOverflow = document.documentElement.style.overflow;
+    root.close();
+    root.setAttribute('data-expanded', '');
+    root.setAttribute('role', 'dialog');
+    root.setAttribute('aria-modal', 'true');
+    root.showModal();
+    expanded = true;
+    document.documentElement.style.overflow = 'hidden';
+    expandButton.textContent = labels.collapse;
+    expandButton.setAttribute('aria-expanded', 'true');
+    expandButton.focus({ preventScroll: true });
+  });
+  root.addEventListener('cancel', event => { event.preventDefault(); collapse(); });
 
   function close(restoreFocus = true) {
+    collapse(false);
     const previous = active;
     active = null;
     previous?.controller.abort();
@@ -87,6 +127,7 @@ export function mountDocument(container, options) {
     viewport.removeAttribute('aria-labelledby');
     viewport.removeAttribute('tabindex');
     closeButton.hidden = true;
+    expandButton.hidden = true;
     previewButton.hidden = false;
     previewButton.setAttribute('aria-expanded', 'false');
     status.textContent = '';
@@ -115,7 +156,7 @@ export function mountDocument(container, options) {
       ]);
       signal.throwIfAborted();
       frame.contentDocument.addEventListener('keydown', event => {
-        if (event.key === 'Escape') { event.preventDefault(); close(); }
+        if (event.key === 'Escape') { event.preventDefault(); if (expanded) collapse(); else close(); }
       }, { signal });
       if (['docx', 'pptx'].includes(format)) validateOfficeZip(data);
       const cleanup = await renderer.render({ data, format, frame, viewport, controls, signal, labels, status,
@@ -125,8 +166,9 @@ export function mountDocument(container, options) {
       const disposeRenderer = cleanup;
       const disposePages = ['doc', 'docx', 'ppt'].includes(format) ? await windowDocumentPages(frame, signal) : null;
       if (active !== session) { disposePages?.(); return; }
-      const disposeChrome = previewChrome({ root, toolbar, frame, signal, labels, fitWidth: format === 'docx' });
+      const disposeChrome = previewChrome({ root, toolbar, frame, signal, labels, fitWidth: ['doc', 'docx'].includes(format) });
       session.cleanup = () => { disposeChrome(); disposePages?.(); disposeRenderer?.(); };
+      expandButton.hidden = false;
       viewport.setAttribute('aria-busy', 'false');
       if (status.textContent === labels.loading) status.textContent = '';
     } catch (error) {
@@ -140,7 +182,7 @@ export function mountDocument(container, options) {
 
   previewButton.addEventListener('click', () => open());
   closeButton.addEventListener('click', () => close());
-  root.addEventListener('keydown', event => { if (event.key === 'Escape' && active) { event.preventDefault(); close(); } });
+  root.addEventListener('keydown', event => { if (event.key === 'Escape' && active) { event.preventDefault(); if (expanded) collapse(); else close(); } });
   if (options.autoOpen !== false) void open({ focus: false });
   return { open, close, destroy() { disposed = true; close(false); stopTheme(); root.remove(); } };
 }

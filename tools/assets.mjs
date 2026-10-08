@@ -35,6 +35,7 @@ export async function documentViewerAssets(prefix = 'document-viewer') {
   const pdfName = 'pdf-assets.' + pdfHash.digest('hex').slice(0, 16);
   const output = resolve(root, '.bundle');
   const bundled = await build({ entryPoints: { index: resolve(root, 'src/index.js'),
+    'doc.worker': resolve(root, 'src/doc/worker.js'),
     'ppt.worker': resolve(root, 'src/ppt/worker.js'),
     'sheets.worker': resolve(root, 'src/sheets/worker.js'),
     'pdf.worker': require.resolve('pdfjs-dist/build/pdf.worker.mjs') },

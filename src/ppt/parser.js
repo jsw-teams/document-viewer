@@ -1,8 +1,9 @@
 import CFB from 'cfb';
+import { textStyles, masterTextStyles, inheritTextStyles } from './text.js';
 
 const types = {
-  document: 1000, documentAtom: 1001, slide: 1006, slidePersist: 1011, colorScheme: 2032,
-  textReference: 3998, textHeader: 3999, textChars: 4000, textBytes: 4008,
+  document: 1000, documentAtom: 1001, slide: 1006, slideAtom: 1007, slidePersist: 1011, colorScheme: 2032,
+  textReference: 3998, textHeader: 3999, textChars: 4000, textStyle: 4001, masterStyle: 4003, textBytes: 4008, font: 4023,
   slideList: 4080, userEdit: 4085, currentUser: 4086, persist: 6002,
   shape: 0xf004, pictureStore: 0xf001, pictureEntry: 0xf007,
   shapeProperties: 0xf00a, options: 0xf00b, textbox: 0xf00d, childAnchor: 0xf00f, anchor: 0xf010
@@ -65,10 +66,24 @@ function textBlocks(stream, items) {
         text = parts.join('');
       }
       if (!current) { current = { role: 4, text: '' }; texts.push(current); }
-      current.text += text.replace(/\r\n?|\v/g, '\n').replace(/\0/g, '');
+      current.text += text.replace(/\r|\v/g, '\n').replace(/\0/g, '');
+    }
+    if (record.type === types.textStyle && current) {
+      try { Object.assign(current, textStyles(stream, record, current.text.length)); }
+      catch { current.paragraphs = []; current.runs = []; }
     }
   }
   return texts;
+}
+
+function masterFormatting(stream, container, state) {
+  const styles = {};
+  for (const record of descendants(stream, container, state, new Set([types.masterStyle]))) {
+    try { styles[record.instance] = masterTextStyles(stream, record); }
+    catch { continue; }
+  }
+  const palette = descendants(stream, container, state, new Set([types.colorScheme])).find(record => record.size >= 32);
+  return { styles, scheme: palette ? Array.from({ length: 8 }, (_, index) => stream.view.getUint32(palette.start + index * 4, true)) : [] };
 }
 
 function persistDirectory(stream, current, state) {
@@ -182,7 +197,7 @@ function shapes(stream, slide, texts, state, scheme) {
     const small = anchor.size === 8;
     const coordinates = Array.from({ length: 4 }, (_, index) => small ? stream.view.getInt16(anchor.start + index * 2, true) : stream.view.getInt32(anchor.start + index * 4, true));
     const [top, left, right, bottom] = anchor.type === types.anchor ? coordinates : [coordinates[1], coordinates[0], coordinates[2], coordinates[3]];
-    const inline = descendants(stream, shape, state, new Set([types.textHeader, types.textChars, types.textBytes, types.textReference]));
+    const inline = descendants(stream, shape, state, new Set([types.textHeader, types.textChars, types.textBytes, types.textStyle, types.textReference]));
     const reference = inline.find(record => record.type === types.textReference && record.size >= 4);
     const referenceIndex = reference ? stream.view.getInt32(reference.start, true) : null;
     if (reference && (referenceIndex < 0 || referenceIndex >= texts.length)) throw new Error('Invalid PPT outline text reference');
@@ -215,7 +230,21 @@ export function parsePpt(input) {
   const height = atom ? stream.view.getInt32(atom.start + 4, true) : 4320;
   if (width <= 0 || height <= 0 || width > 100000 || height > 100000) throw new Error('Invalid PPT slide dimensions');
   const pictures = images(stream, document, pictureEntry?.content ? binary(pictureEntry.content) : null, state);
+  const fonts = [];
+  for (const font of descendants(stream, document, state, new Set([types.font]))) {
+    if (font.size === 68 && font.instance <= 128) fonts[font.instance] = new TextDecoder('utf-16le').decode(stream.data.subarray(font.start, font.start + 64)).split('\0')[0];
+  }
   const lists = records(stream, document.start, document.end, state).filter(record => record.type === types.slideList && record.instance === 0);
+  const defaultFormatting = masterFormatting(stream, document, state);
+  const masters = new Map();
+  for (const list of records(stream, document.start, document.end, state).filter(record => record.type === types.slideList && record.instance === 1)) {
+    for (const record of records(stream, list.start, list.end, state)) {
+      if (record.type !== types.slidePersist || record.size < 16) continue;
+      const persistId = stream.view.getUint32(record.start, true);
+      const id = stream.view.getUint32(record.start + 12, true);
+      if (mapping.has(persistId)) masters.set(id, masterFormatting(stream, header(stream, mapping.get(persistId)), state));
+    }
+  }
   const slides = [];
   for (const list of lists) {
     let entry = null;
@@ -233,11 +262,17 @@ export function parsePpt(input) {
     const container = header(stream, mapping.get(slide.persistId));
     if (container.type !== types.slide || container.version !== 15) throw new Error('Invalid PPT slide container');
     slide.texts = textBlocks(stream, slide.records);
+    const slideAtom = records(stream, container.start, container.end, state).find(record => record.type === types.slideAtom && record.size >= 24);
+    const master = slideAtom ? masters.get(stream.view.getUint32(slideAtom.start + 12, true)) : null;
     const palette = descendants(stream, container, state, new Set([types.colorScheme])).find(record => record.size >= 32);
-    const scheme = palette ? Array.from({ length: 8 }, (_, index) => stream.view.getUint32(palette.start + index * 4, true)) : [];
+    const ownScheme = palette ? Array.from({ length: 8 }, (_, index) => stream.view.getUint32(palette.start + index * 4, true)) : [];
+    const scheme = master && (stream.view.getUint16(slideAtom.start + 20, true) & 2) ? master.scheme : ownScheme;
+    slide.scheme = scheme;
     slide.shapes = shapes(stream, container, slide.texts, state, scheme);
-    slide.texts.push(...textBlocks(stream, descendants(stream, container, state, new Set([types.textHeader, types.textChars, types.textBytes]))));
+    slide.texts.push(...textBlocks(stream, descendants(stream, container, state, new Set([types.textHeader, types.textChars, types.textBytes, types.textStyle]))));
+    const content = new Set([...slide.texts, ...slide.shapes.flatMap(shape => shape.texts)]);
+    for (const item of content) inheritTextStyles(item, defaultFormatting.styles[item.role] || defaultFormatting.styles[4], item.role !== 4 ? master?.styles[item.role] : undefined);
     delete slide.records;
   }
-  return { width, height, slides, pictures };
+  return { width, height, slides, pictures, fonts };
 }

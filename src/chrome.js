@@ -4,6 +4,7 @@ export function previewChrome({ root, toolbar, frame, signal, labels, fitWidth =
   const percentage = document.createElement('output');
   percentage.textContent = '100%';
   let zoom = 1;
+  let fitting = fitWidth;
   const button = (label, text, action) => {
     const node = document.createElement('button');
     node.type = 'button';
@@ -18,11 +19,13 @@ export function previewChrome({ root, toolbar, frame, signal, labels, fitWidth =
     percentage.textContent = Math.round(zoom * 100) + '%';
     smaller.disabled = zoom <= 0.1;
     larger.disabled = zoom >= 2;
+    frame.contentWindow.dispatchEvent(new CustomEvent('document-viewer-zoom', { detail: zoom }));
   };
-  const smaller = button(labels.zoomOut, '−', () => { zoom = Math.max(0.1, zoom - 0.25); update(); });
+  const smaller = button(labels.zoomOut, '−', () => { fitting = false; zoom = Math.max(0.1, zoom - 0.25); update(); });
   tools.append(percentage);
-  const larger = button(labels.zoomIn, '+', () => { zoom = Math.min(2, zoom + 0.25); update(); });
+  const larger = button(labels.zoomIn, '+', () => { fitting = false; zoom = Math.min(2, zoom + 0.25); update(); });
   const fit = () => {
+    fitting = true;
     const body = frame.contentDocument.body;
     body.style.zoom = '1';
     const width = Math.max(frame.clientWidth, body.scrollWidth);
@@ -59,6 +62,8 @@ export function previewChrome({ root, toolbar, frame, signal, labels, fitWidth =
     queue();
   });
   observer.observe(doc.body, { childList: true, subtree: true });
+  const resize = new ResizeObserver(() => { if (fitting && frame.clientWidth) fit(); queue(); });
+  resize.observe(frame);
   report();
-  return () => { observer.disconnect(); if (scheduled !== null) cancelAnimationFrame(scheduled); tools.remove(); position.remove(); };
+  return () => { observer.disconnect(); resize.disconnect(); if (scheduled !== null) cancelAnimationFrame(scheduled); tools.remove(); position.remove(); };
 }

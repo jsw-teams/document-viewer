@@ -1,4 +1,4 @@
-import { getDocument, GlobalWorkerOptions, TextLayer, PDFDataRangeTransport } from 'pdfjs-dist/build/pdf.mjs';
+import { getDocument, GlobalWorkerOptions, TextLayer, PDFDataRangeTransport, AnnotationMode } from 'pdfjs-dist/build/pdf.mjs';
 import { documentPage } from '../pages.js';
 
 GlobalWorkerOptions.workerSrc = new URL('../pdf.worker.js', import.meta.url).href;
@@ -22,6 +22,9 @@ export async function render({ data, frame, signal, labels, status, setCleanup }
   let renderTask = null;
   let textLayer = null;
   let observer = null;
+  let resize = null;
+  let revision = 0;
+  let magnification = 1;
   let destroyed = false;
   const cache = new Map();
   const waiting = new Set();
@@ -31,6 +34,7 @@ export async function render({ data, frame, signal, labels, status, setCleanup }
     if (destroyed) return;
     destroyed = true;
     observer?.disconnect();
+    resize?.disconnect();
     waiting.clear();
     renderTask?.cancel();
     textLayer?.cancel();
@@ -46,24 +50,30 @@ export async function render({ data, frame, signal, labels, status, setCleanup }
   doc.head.append(style);
   const first = await pdf.getPage(1);
   signal.throwIfAborted();
-  const available = Math.max(1, frame.clientWidth - 24);
-  const defaultViewport = first.getViewport({ scale: Math.min(2, available / first.getViewport({ scale: 1 }).width) });
-  const pages = Array.from({ length: pdf.numPages }, (_, index) => {
+  let available = Math.max(1, frame.clientWidth - 24);
+  const pages = [];
+  for (let index = 0; index < pdf.numPages; index++) {
+    const page = index === 0 ? first : await pdf.getPage(index + 1);
+    signal.throwIfAborted();
+    const natural = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({ scale: Math.min(2, available / natural.width) });
     const section = documentPage(doc, labels, index, pdf.numPages);
     const wrapper = doc.createElement('div');
     wrapper.className = 'pdf-page';
-    wrapper.style.width = defaultViewport.width + 'px';
-    wrapper.style.height = defaultViewport.height + 'px';
+    wrapper.style.width = viewport.width + 'px';
+    wrapper.style.height = viewport.height + 'px';
     wrapper.setAttribute('aria-busy', 'true');
     section.append(wrapper);
     doc.body.append(section);
-    return { section, wrapper, index };
-  });
+    pages.push({ section, wrapper, index, natural });
+    page.cleanup();
+  }
   async function draw(entry) {
+    const version = revision;
     const page = await pdf.getPage(entry.index + 1);
     signal.throwIfAborted();
     const viewport = page.getViewport({ scale: Math.min(2, available / page.getViewport({ scale: 1 }).width) });
-    const ratio = Math.min(2, Math.max(devicePixelRatio || 1, 600 / viewport.width), Math.sqrt(12000000 / (viewport.width * viewport.height)));
+    const ratio = Math.min(4, Math.max(devicePixelRatio || 1, 600 / viewport.width) * magnification, Math.sqrt(12000000 / (viewport.width * viewport.height)));
     const pixels = viewport.width * viewport.height * ratio * ratio;
     const wrapper = entry.wrapper;
     wrapper.style.width = viewport.width + 'px';
@@ -73,15 +83,22 @@ export async function render({ data, frame, signal, labels, status, setCleanup }
     const canvas = doc.createElement('canvas');
     canvas.width = Math.ceil(viewport.width * ratio);
     canvas.height = Math.ceil(viewport.height * ratio);
-    renderTask = page.render({ canvasContext: canvas.getContext('2d'), viewport, transform: [ratio, 0, 0, ratio, 0, 0] });
-    await renderTask.promise;
-    renderTask = null;
-    signal.throwIfAborted();
-    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    renderTask = page.render({ canvasContext: canvas.getContext('2d'), viewport, annotationMode: AnnotationMode.ENABLE, transform: [ratio, 0, 0, ratio, 0, 0] });
+    let blob;
+    try {
+      await renderTask.promise;
+      signal.throwIfAborted();
+      if (version !== revision) return;
+      blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    } finally {
+      renderTask = null;
+      canvas.width = 0;
+      canvas.height = 0;
+      page.cleanup();
+    }
     if (!blob) throw new Error('PDF page image could not be created');
-    canvas.width = 0;
-    canvas.height = 0;
     signal.throwIfAborted();
+    if (version !== revision) { page.cleanup(); return; }
     const url = URL.createObjectURL(blob);
     cache.set(entry.index, { url, pixels, busy: true });
     const painted = doc.createElement('img');
@@ -91,12 +108,13 @@ export async function render({ data, frame, signal, labels, status, setCleanup }
       const aborted = () => reject(signal.reason);
       signal.addEventListener('abort', aborted, { once: true });
       painted.onload = () => { signal.removeEventListener('abort', aborted); resolve(); };
-      painted.onerror = () => { signal.removeEventListener('abort', aborted); reject(new Error('PDF page image could not be displayed')); };
+      painted.onerror = () => { signal.removeEventListener('abort', aborted); if (version !== revision) resolve(); else reject(new Error('PDF page image could not be displayed')); };
     });
     painted.src = url;
     wrapper.replaceChildren(painted);
     await loaded;
     signal.throwIfAborted();
+    if (version !== revision) { page.cleanup(); return; }
     const text = doc.createElement('div');
     text.className = 'textLayer';
     wrapper.append(text);
@@ -106,6 +124,7 @@ export async function render({ data, frame, signal, labels, status, setCleanup }
     signal.throwIfAborted();
     wrapper.setAttribute('aria-busy', 'false');
     page.cleanup();
+    if (version !== revision || !cache.has(entry.index)) { page.cleanup(); return; }
     cache.get(entry.index).busy = false;
     if (observer && !nearby.has(entry.index)) {
       URL.revokeObjectURL(url);
@@ -134,9 +153,9 @@ export async function render({ data, frame, signal, labels, status, setCleanup }
         waiting.delete(index);
         if (nearby.has(index) && !cache.has(index)) await draw(pages[index]);
       }
-    } catch {
-      if (!signal.aborted && !destroyed) status.textContent = labels.error;
-    } finally { running = false; }
+    } catch (error) {
+      if (!signal.aborted && !destroyed && !['RenderingCancelledException', 'AbortException', 'AbortError'].includes(error.name)) status.textContent = labels.error;
+    } finally { running = false; if (waiting.size && !destroyed) void drain(); }
   }
   observer = new IntersectionObserver(entries => {
     for (const entry of entries) {
@@ -153,5 +172,31 @@ export async function render({ data, frame, signal, labels, status, setCleanup }
     void drain();
   }, { root: doc, rootMargin: '600px 0px' });
   for (const page of pages) observer.observe(page.section);
+  const invalidate = () => {
+    if (destroyed) return;
+    revision++;
+    renderTask?.cancel();
+    textLayer?.cancel();
+    for (const cached of cache.values()) URL.revokeObjectURL(cached.url);
+    cache.clear();
+    for (const entry of pages) {
+      const scale = Math.min(2, available / entry.natural.width);
+      entry.wrapper.style.width = entry.natural.width * scale + 'px';
+      entry.wrapper.style.height = entry.natural.height * scale + 'px';
+      entry.wrapper.replaceChildren();
+      entry.wrapper.setAttribute('aria-busy', 'true');
+      if (nearby.has(entry.index)) waiting.add(entry.index);
+    }
+    void drain();
+  };
+  frame.contentWindow.addEventListener('document-viewer-zoom', event => {
+    const next = Math.max(1, event.detail);
+    if (next !== magnification) { magnification = next; invalidate(); }
+  }, { signal });
+  resize = new ResizeObserver(() => {
+    const width = Math.max(1, frame.clientWidth - 24);
+    if (width !== available) { available = width; invalidate(); }
+  });
+  resize.observe(frame);
   return cleanup;
 }

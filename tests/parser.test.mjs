@@ -4,6 +4,29 @@ import { parsePpt } from '../src/ppt/parser.js';
 import { documentFormat, documentUrl } from '../src/formats.js';
 import { validateOfficeZip } from '../src/zip-limits.js';
 import { legacyPpt, wordFixture } from './fixtures.mjs';
+import { textColor } from '../src/ppt/text.js';
+
+test('MS-PPT restores bounded paragraph and character runs, font references and literal/scheme colors', () => {
+  const model = parsePpt(legacyPpt({ styled: true }));
+  assert.deepEqual(model.fonts, ['Georgia']);
+  const text = model.slides[0].shapes[0].texts[0];
+  assert.equal(text.paragraphs[0].align, 1);
+  assert.deepEqual(text.runs[0], { start: 0, end: text.text.length + 1, bold: true, italic: true, underline: true, font: 0, size: 18, color: 0xfe0000ff });
+  assert.equal(textColor(text.runs[0].color), '#ff0000');
+  assert.equal(textColor(0x01000000, [0, 0x332211]), '#112233');
+  const recovered = parsePpt(legacyPpt({ styled: true, brokenStyle: true })).slides[0].texts[0];
+  assert.equal(recovered.text, 'First slide: 中文');
+  assert.deepEqual(recovered.runs, [{ start: 0, end: recovered.text.length + 1 }]);
+});
+
+test('MS-PPT placeholder runs inherit main-master formatting and explicit runs override it', () => {
+  const inherited = parsePpt(legacyPpt({ masterStyle: true })).slides[0].texts[0];
+  assert.equal(inherited.paragraphs[0].align, 2);
+  assert.equal(inherited.runs[0].size, 30);
+  const explicit = parsePpt(legacyPpt({ masterStyle: true, styled: true })).slides[0].texts[0];
+  assert.equal(explicit.paragraphs[0].align, 1);
+  assert.equal(explicit.runs[0].size, 18);
+});
 
 test('legacy PPT follows active slide order and resolves positioned outline text without a vendor engine', () => {
   const model = parsePpt(legacyPpt());

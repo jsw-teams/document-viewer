@@ -1,8 +1,8 @@
 import { read, utils, SSF } from 'xlsx';
 import { officeArchive, xmlPart, scanXml, scanElements, scanCells } from './archive.js';
 import { elements, cellAddress, textRuns, xmlText } from './xml.js';
-
-const color = value => /^[a-f0-9]{6}$/i.test(value?.slice(-6) || '') ? '#' + value.slice(-6) : undefined;
+import { spreadsheetTheme, workbookStyles, richText } from './styles.js';
+import { formulaEvaluator, FormulaError, rebaseFormula } from './formula.js';
 
 function columnPixels(value) {
   const width = Number(value);
@@ -25,26 +25,14 @@ export async function workbookSource(data, format) {
     if (path.split('/').includes('..')) throw new Error('Unsafe workbook relationship');
     return [entry.attributes.Id, path];
   }));
-  const sheets = elements(workbook, 'sheet').filter(entry => entry.attributes.state !== 'veryHidden').map(entry => ({ name: entry.attributes.name, path: paths.get(entry.attributes['r:id']) }));
-  if (!sheets.length || sheets.some(sheet => !archive.has(sheet.path))) throw new Error('Invalid workbook sheets');
+  const allSheets = elements(workbook, 'sheet').map(entry => ({ name: entry.attributes.name, path: paths.get(entry.attributes['r:id']), state: entry.attributes.state }));
+  const sheets = allSheets.filter(sheet => !['hidden', 'veryHidden'].includes(sheet.state));
+  if (!sheets.length || allSheets.some(sheet => !archive.has(sheet.path))) throw new Error('Invalid workbook sheets');
   const styles = archive.has('xl/styles.xml') ? await xmlPart(archive.get('xl/styles.xml')) : '';
-  const formats = new Map(elements(styles, 'numFmt').map(entry => [Number(entry.attributes.numFmtId), entry.attributes.formatCode]));
-  const fonts = elements(elements(styles, 'fonts')[0]?.content || '', 'font');
-  const fills = elements(elements(styles, 'fills')[0]?.content || '', 'fill');
-  const cellStyles = elements(elements(styles, 'cellXfs')[0]?.content || '', 'xf').map(entry => {
-    const font = fonts[Number(entry.attributes.fontId)]?.content || '';
-    const fill = fills[Number(entry.attributes.fillId)]?.content || '';
-    const alignment = elements(entry.content, 'alignment')[0]?.attributes || {};
-    return { numberFormat: formats.get(Number(entry.attributes.numFmtId)) || SSF.get_table()[Number(entry.attributes.numFmtId)],
-      bold: /<(?:[\w.-]+:)?b(?:\s|\/>|>)/.test(font), italic: /<(?:[\w.-]+:)?i(?:\s|\/>|>)/.test(font),
-      color: color(elements(font, 'color')[0]?.attributes.rgb), background: color(elements(fill, 'fgColor')[0]?.attributes.rgb),
-      align: ['left', 'right', 'center', 'justify'].includes(alignment.horizontal) ? alignment.horizontal : undefined,
-      wrap: ['1', 'true'].includes(alignment.wrapText),
-      vertical: { top: 'top', center: 'middle', bottom: 'bottom' }[alignment.vertical],
-      font: elements(font, 'name')[0]?.attributes.val?.slice(0, 128),
-      size: Number(elements(font, 'sz')[0]?.attributes.val) || undefined };
-  });
-  return { data, format, archive, sheets, names: sheets.map(sheet => sheet.name), styles: cellStyles, date1904: ['1', 'true'].includes(elements(workbook, 'workbookPr')[0]?.attributes.date1904) };
+  const theme = spreadsheetTheme(archive.has('xl/theme/theme1.xml') ? await xmlPart(archive.get('xl/theme/theme1.xml')) : '');
+  const cellStyles = workbookStyles(styles, theme, SSF.get_table());
+  const definedNames = elements(workbook, 'definedName').map(entry => ({ name: entry.attributes.name, value: xmlText(entry.content), sheet: entry.attributes.localSheetId === undefined ? undefined : Number(entry.attributes.localSheetId) }));
+  return { data, format, archive, sheets, allSheets, names: sheets.map(sheet => sheet.name), styles: cellStyles, theme, definedNames, date1904: ['1', 'true'].includes(elements(workbook, 'workbookPr')[0]?.attributes.date1904) };
 }
 
 export async function sheetInfo(source, index, cancelled) {
@@ -54,12 +42,22 @@ export async function sheetInfo(source, index, cancelled) {
     const sheet = workbook.Sheets[source.names[index]];
     const range = utils.decode_range(sheet['!ref'] || 'A1');
     const columnWidths = {};
+    const rowHeights = {};
+    const hiddenRows = [];
+    const hiddenColumns = [];
     for (const [position, column] of (sheet['!cols'] || []).entries()) {
       if (!column) continue;
+      if (column.hidden) hiddenColumns.push(position);
       const width = column.width === undefined ? column.wpx : columnPixels(column.width);
       if (Number.isFinite(width) && width > 0 && width <= 1800) columnWidths[position] = width;
     }
-    return { rows: range.e.r + 1, columns: range.e.c + 1, merges: sheet['!merges'] || [], columnWidth: 64, columnWidths };
+    for (const [position, row] of (sheet['!rows'] || []).entries()) {
+      if (!row) continue;
+      if (row.hidden) hiddenRows.push(position);
+      const height = row.hpx ?? (row.hpt === undefined ? undefined : row.hpt * 96 / 72);
+      if (Number.isFinite(height) && height > 0 && height <= 10000) rowHeights[position] = height;
+    }
+    return { rows: range.e.r + 1, columns: range.e.c + 1, merges: sheet['!merges'] || [], columnWidth: 64, columnWidths, rowHeight: 20, rowHeights, hiddenRows, hiddenColumns, gridLines: true };
   }
   const entry = source.archive.get(source.sheets[index].path);
   let header = '';
@@ -75,21 +73,41 @@ export async function sheetInfo(source, index, cancelled) {
   }, cancelled);
   const merges = [];
   const columnWidths = {};
-  const defaultWidth = elements(header, 'sheetFormatPr')[0]?.attributes.defaultColWidth;
+  const rowHeights = {};
+  const hiddenRows = [];
+  const hiddenColumns = [];
+  const columnStyles = {};
+  const rowStyles = {};
+  const defaults = elements(header, 'sheetFormatPr')[0]?.attributes || {};
+  const defaultWidth = defaults.defaultColWidth;
   for (const column of elements(header, 'col')) {
     const begin = Number(column.attributes.min) - 1;
     const endColumn = Number(column.attributes.max) - 1;
     if (!Number.isInteger(begin) || !Number.isInteger(endColumn) || begin < 0 || endColumn < begin || endColumn >= 16384) throw new Error('Invalid worksheet column range');
-    if (column.attributes.width === undefined) continue;
-    const width = Math.max(1, columnPixels(column.attributes.width));
-    for (let position = begin; position <= Math.min(end.column, endColumn); position++) columnWidths[position] = width;
+    const width = column.attributes.width === undefined ? undefined : Math.max(1, columnPixels(column.attributes.width));
+    for (let position = begin; position <= Math.min(end.column, endColumn); position++) {
+      if (width !== undefined) columnWidths[position] = width;
+      if (['1', 'true'].includes(column.attributes.hidden)) hiddenColumns.push(position);
+      if (column.attributes.style !== undefined) columnStyles[position] = source.styles[Number(column.attributes.style)];
+    }
   }
+  await scanCells(entry, () => {}, cancelled, ({ row, attributes }) => {
+    if (['1', 'true'].includes(attributes.hidden)) hiddenRows.push(row);
+    if (attributes.ht !== undefined) {
+      const height = Number(attributes.ht) * 96 / 72;
+      if (!Number.isFinite(height) || height < 0 || height > 10000) throw new Error('Invalid worksheet row height');
+      rowHeights[row] = height;
+    }
+    if (attributes.s !== undefined && ['1', 'true'].includes(attributes.customFormat)) rowStyles[row] = source.styles[Number(attributes.s)];
+  }, cancelled);
   await scanElements(entry, 'mergeCell', merge => {
     const [start, finish] = merge.attributes.ref.split(':').map(cellAddress);
     if (finish.row < start.row || finish.column < start.column || merges.length >= 100000) throw new Error('Invalid worksheet merges');
     merges.push({ s: { r: start.row, c: start.column }, e: { r: finish.row, c: finish.column } });
   }, cancelled);
-  return { rows: end.row + 1, columns: end.column + 1, merges, columnWidth: defaultWidth === undefined ? 64 : Math.max(1, columnPixels(defaultWidth)), columnWidths };
+  const height = defaults.defaultRowHeight === undefined ? 20 : Number(defaults.defaultRowHeight) * 96 / 72;
+  if (!Number.isFinite(height) || height <= 0 || height > 10000) throw new Error('Invalid default worksheet row height');
+  return { rows: end.row + 1, columns: end.column + 1, merges, columnWidth: defaultWidth === undefined ? 64 : Math.max(1, columnPixels(defaultWidth)), columnWidths, rowHeight: height, rowHeights, hiddenRows, hiddenColumns, columnStyles, rowStyles, defaultStyle: source.styles[0], gridLines: !['0', 'false'].includes(elements(header, 'sheetView')[0]?.attributes.showGridLines) };
 }
 
 export async function sheetWindow(source, index, range, cancelled) {
@@ -100,13 +118,13 @@ export async function sheetWindow(source, index, range, cancelled) {
     const sheet = workbook.Sheets[source.names[index]];
     for (let row = range.startRow; row <= range.endRow; row++) for (let column = range.startColumn; column <= range.endColumn; column++) {
       const cell = sheet['!data']?.[row]?.[column];
-      if (cell) cells.push({ row, column, text: utils.format_cell(cell), formula: cell.f || '' });
+      if (cell) cells.push({ row, column, text: utils.format_cell(cell), formula: cell.f || '', missingResult: !!cell.f && (cell.v === undefined || cell.v === null), numberFormat: cell.z });
     }
     for (const anchor of range.anchors || []) {
       const cell = sheet['!data']?.[anchor.row]?.[anchor.column];
-      if (cell) cells.push({ ...anchor, text: utils.format_cell(cell), formula: cell.f || '' });
+      if (cell) cells.push({ ...anchor, text: utils.format_cell(cell), formula: cell.f || '', missingResult: !!cell.f && (cell.v === undefined || cell.v === null), numberFormat: cell.z });
     }
-    return cells;
+    return calculateWindow(source, index, cells, cancelled);
   }
   const strings = new Set();
   await scanCells(source.archive.get(source.sheets[index].path), cell => {
@@ -115,7 +133,8 @@ export async function sheetWindow(source, index, range, cancelled) {
     if (!anchors.has(address.row + ':' + address.column) && (address.row < range.startRow || address.column < range.startColumn || address.column > range.endColumn)) return;
     const raw = xmlText(elements(cell.content, 'v')[0]?.content || '');
     const type = cell.attributes.t;
-    const style = { ...source.styles[Number(cell.attributes.s)] };
+    const inherited = cell.rowAttributes.s !== undefined && ['1', 'true'].includes(cell.rowAttributes.customFormat) ? source.styles[Number(cell.rowAttributes.s)] : range.columnStyles?.[address.column];
+    const style = { ...(cell.attributes.s === undefined ? inherited || source.styles[0] : source.styles[Number(cell.attributes.s)]) };
     if (!style.align && (!type || type === 'n')) style.align = 'right';
     let text = type === 'inlineStr' ? textRuns(cell.content) : raw;
     if (type === 'b') text = raw === '1' ? 'TRUE' : 'FALSE';
@@ -127,18 +146,118 @@ export async function sheetWindow(source, index, range, cancelled) {
       if (!Number.isSafeInteger(shared) || shared < 0) throw new Error('Invalid shared string index');
       strings.add(shared);
     }
-    cells.push({ ...address, text, shared, style, formula: xmlText(elements(cell.content, 'f')[0]?.content || '') });
+    const definition = elements(cell.content, 'f')[0];
+    const formula = xmlText(definition?.content || '');
+    cells.push({ ...address, text, shared, style, runs: type === 'inlineStr' ? richText(cell.content, source.theme) : undefined, formula, sharedFormula: definition?.attributes.t === 'shared' ? definition.attributes.si : undefined, missingResult: !!definition && raw === '' && type !== 'str' });
   }, cancelled);
+  await resolveSharedFormulas(source, source.sheets[index].path, cells, cancelled);
   if (strings.size) {
     const values = new Map();
     let position = 0;
     await scanElements(source.archive.get('xl/sharedStrings.xml'), 'si', entry => {
-      if (strings.has(position)) { values.set(position, textRuns(entry.content)); strings.delete(position); }
+      if (strings.has(position)) { values.set(position, { text: textRuns(entry.content), runs: richText(entry.content, source.theme) }); strings.delete(position); }
       position++;
       return strings.size > 0;
     }, cancelled);
     if (strings.size) throw new Error('Missing shared string');
-    for (const cell of cells) if (cell.shared !== null) cell.text = values.get(cell.shared);
+    for (const cell of cells) if (cell.shared !== null) Object.assign(cell, values.get(cell.shared));
   }
+  return calculateWindow(source, index, cells, cancelled);
+}
+
+async function calculateWindow(source, index, cells, cancelled) {
+  if (!cells.some(cell => cell.missingResult)) return cells;
+  const names = source.format === 'xls' ? source.names : source.allSheets.map(sheet => sheet.name);
+  const currentSheet = source.format === 'xls' ? index : source.allSheets.indexOf(source.sheets[index]);
+  const blocks = new Map();
+  const readCell = async (sheet, address) => {
+    if (!names[sheet]) throw new FormulaError('#REF!');
+    const firstRow = Math.floor(address.row / 256) * 256;
+    const firstColumn = Math.floor(address.column / 32) * 32;
+    const key = sheet + ':' + firstRow + ':' + firstColumn;
+    if (!blocks.has(key)) {
+      const values = new Map();
+      const strings = new Set();
+      let characters = 0;
+      const keep = (row, column, value) => {
+        characters += (typeof value.value === 'string' ? value.value.length : 0) + (value.formula?.length || 0);
+        if (characters > 4 * 1024 * 1024) throw new FormulaError('#NUM!');
+        values.set(row + ':' + column, value);
+      };
+      if (source.format === 'xls') {
+        const workbook = read(source.data, { type: 'array', sheets: [sheet], dense: true, cellHTML: false, bookVBA: false });
+        const data = workbook.Sheets[source.names[sheet]]['!data'] || [];
+        for (let row = firstRow; row < firstRow + 256; row++) for (let column = firstColumn; column < firstColumn + 32; column++) {
+          const cell = data[row]?.[column];
+          if (cell) keep(row, column, { value: cell.v ?? null, formula: cell.f || '', error: cell.t === 'e' ? utils.format_cell(cell) : undefined });
+        }
+      } else {
+        await scanCells(source.archive.get(source.allSheets[sheet].path), cell => {
+          const position = cell.address;
+          if (position.row >= firstRow + 256) return false;
+          if (position.row < firstRow || position.column < firstColumn || position.column >= firstColumn + 32) return;
+          const raw = xmlText(elements(cell.content, 'v')[0]?.content || '');
+          const type = cell.attributes.t;
+          let value = raw === '' ? null : !type || type === 'n' ? Number(raw) : type === 'b' ? raw === '1' : raw;
+          if (type === 'inlineStr') value = textRuns(cell.content);
+          if (type === 'str') value = raw;
+          const shared = type === 's' ? Number(raw) : undefined;
+          if (shared !== undefined) { if (!Number.isSafeInteger(shared) || shared < 0) throw new FormulaError('#REF!'); strings.add(shared); }
+          const definition = elements(cell.content, 'f')[0];
+          keep(position.row, position.column, { ...position, value, shared, formula: xmlText(definition?.content || ''), sharedFormula: definition?.attributes.t === 'shared' ? definition.attributes.si : undefined, error: type === 'e' ? raw : undefined });
+        }, cancelled);
+        await resolveSharedFormulas(source, source.allSheets[sheet].path, [...values.values()], cancelled);
+        if (strings.size) {
+          let position = 0;
+          const resolved = new Map();
+          await scanElements(source.archive.get('xl/sharedStrings.xml'), 'si', entry => {
+            if (strings.has(position)) { const value = textRuns(entry.content); characters += value.length; if (characters > 4 * 1024 * 1024) throw new FormulaError('#NUM!'); resolved.set(position, value); strings.delete(position); }
+            position++;
+            return strings.size > 0;
+          }, cancelled);
+          if (strings.size) throw new FormulaError('#REF!');
+          for (const value of values.values()) if (value.shared !== undefined) value.value = resolved.get(value.shared);
+        }
+      }
+      if (blocks.size >= 4) blocks.delete(blocks.keys().next().value);
+      blocks.set(key, values);
+    }
+    return blocks.get(key).get(address.row + ':' + address.column);
+  };
+  const evaluator = formulaEvaluator({ readCell, names, definedNames: source.definedNames, cancelled });
+  try {
+    for (const cell of cells) {
+      if (!cell.missingResult) continue;
+      try {
+        const value = await evaluator.cell(currentSheet, cell);
+        cell.text = typeof value === 'boolean' ? value ? 'TRUE' : 'FALSE' : value === null ? '0' : typeof value === 'number' ? SSF.format(cell.style?.numberFormat || cell.numberFormat || 'General', value, { date1904: source.date1904 }) : String(value);
+        cell.calculated = true;
+      } catch (error) {
+        if (!(error instanceof FormulaError)) throw error;
+        cell.text = error.message;
+        cell.calculationError = true;
+      }
+    }
+  } finally { evaluator.dispose(); blocks.clear(); }
   return cells;
+}
+
+async function resolveSharedFormulas(source, path, cells, cancelled) {
+  const unresolved = cells.filter(cell => cell.sharedFormula !== undefined && !cell.formula);
+  if (!unresolved.length) return;
+  const identifiers = new Set(unresolved.map(cell => cell.sharedFormula));
+  const definitions = new Map();
+  await scanCells(source.archive.get(path), cell => {
+    const definition = elements(cell.content, 'f')[0];
+    const identifier = definition?.attributes.si;
+    if (definition?.content && identifiers.has(identifier)) {
+      definitions.set(identifier, { ...cell.address, formula: xmlText(definition.content) });
+      identifiers.delete(identifier);
+    }
+    return identifiers.size > 0;
+  }, cancelled);
+  for (const cell of unresolved) {
+    const definition = definitions.get(cell.sharedFormula);
+    cell.formula = definition ? rebaseFormula(definition.formula, cell.row - definition.row, cell.column - definition.column) : '#REF!';
+  }
 }

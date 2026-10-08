@@ -1,4 +1,5 @@
 import { documentPage } from '../pages.js';
+import { styledText } from '../ppt/text.js';
 
 const namespace = 'http://www.w3.org/2000/svg';
 
@@ -60,8 +61,8 @@ export async function render({ data, frame, controls, signal, labels, status, se
       if (shape.texts.length && shape.width >= presentation.width / 30 && textHeight >= presentation.width / 30 && shape.left >= 0 && shape.top >= 0 && shape.left + shape.width <= presentation.width && shape.top + textHeight <= presentation.height) {
         const box = create('foreignObject', { x: shape.left, y: shape.top, width: shape.width, height: textHeight });
         const text = frame.contentDocument.createElementNS('http://www.w3.org/1999/xhtml', 'div');
-        text.style.cssText = `font:${presentation.width / 30}px system-ui;white-space:pre-wrap;overflow-wrap:anywhere;color:#222;padding:8px;box-sizing:border-box`;
-        text.textContent = shape.texts.map(item => item.text).join('\n');
+        text.style.cssText = 'padding:8px;box-sizing:border-box';
+        for (const item of shape.texts) text.append(styledText(frame.contentDocument, item, { fonts: presentation.fonts, scheme: slide.scheme, size: presentation.width / 240 }));
         box.append(text);
         group.append(box);
         positioned.set(box, shape);

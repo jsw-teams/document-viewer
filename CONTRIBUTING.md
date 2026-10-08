@@ -24,7 +24,9 @@ On Linux use `npx playwright install --with-deps chromium` if browser libraries 
 
 `src/renderers/`: format renderers; `src/ppt/`: project-owned parser; `src/sheets/`: workbook Worker; `tools/`: local asset graph; `tests/`: parser/browser fixtures.
 
-Keep this browser-only and read-only. Preserve script-disabled frames, local dependencies, consent, continuous pages and offscreen resource reclamation. Do not execute macros/formulas or add conversion servers, download controls or proprietary/watermarked engines. Explain renderer and initial-memory boundaries honestly. Optional operator samples must not be required by normal CI.
+Keep this browser-only and read-only. Preserve script-disabled frames, local dependencies, consent, continuous pages and offscreen resource reclamation. Do not execute macros or document scripts, compile formulas into JavaScript, or add conversion servers, download controls or proprietary/watermarked engines. Formula preview changes need bounded interpreter tests against documented Calc semantics; prefer saved results and discard calculation caches with each window. Explain renderer and initial-memory boundaries honestly. Optional operator samples must not be required by normal CI.
+
+To check your own non-private Office/PDF examples locally, set `DOCUMENT_VIEWER_SAMPLES` to a sample folder and optionally `DOCUMENT_VIEWER_PDF` to a PDF path before running `npm test`. `DOCUMENT_VIEWER_SCREENSHOTS` optionally writes preview evidence to a local folder. These files are never uploaded by tests and must not be committed automatically.
 
 Generated output, dependencies and temporary evidence are not source edits. Preserve APIs, content, languages, licenses and attribution. Add regression tests beside existing ones; do not weaken an assertion to conceal a failure.
 

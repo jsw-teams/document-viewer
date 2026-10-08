@@ -12,6 +12,7 @@ export function documentPage(doc, labels, index, total) {
 
 export function labelPages(nodes, labels) {
   nodes.forEach((node, index) => {
+    if (node.parentElement?.matches('[data-document-page]')) return;
     const page = documentPage(node.ownerDocument, labels, index, nodes.length);
     node.before(page);
     page.append(node);

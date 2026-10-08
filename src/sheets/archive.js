@@ -82,10 +82,11 @@ export async function scanElements(entry, name, visit, cancelled) {
   }, cancelled);
 }
 
-export async function scanCells(entry, visit, cancelled) {
+export async function scanCells(entry, visit, cancelled, visitRow) {
   let buffer = '';
   let row = -1;
   let column = 0;
+  let rowAttributes = {};
   const opening = /<(?:[\w.-]+:)?(row|c)\b[^>]*>/g;
   const closing = /<\/(?:[\w.-]+:)?c\s*>/;
   await scanXml(entry, chunk => {
@@ -98,7 +99,15 @@ export async function scanCells(entry, visit, cancelled) {
       buffer = buffer.slice(start.index);
       const tag = start[0];
       const properties = attributes(tag);
-      if (start[1] === 'row') { row = properties.r ? Number(properties.r) - 1 : row + 1; column = 0; buffer = buffer.slice(tag.length); continue; }
+      if (start[1] === 'row') {
+        row = properties.r ? Number(properties.r) - 1 : row + 1;
+        if (!Number.isSafeInteger(row) || row < 0 || row >= 1048576) throw new Error('Invalid worksheet row');
+        column = 0;
+        rowAttributes = properties;
+        buffer = buffer.slice(tag.length);
+        if (visitRow?.({ row, attributes: properties }) === false) return false;
+        continue;
+      }
       const end = /\/>$/.test(tag) ? { index: 0, 0: '' } : closing.exec(buffer.slice(tag.length));
       if (!end) break;
       const content = buffer.slice(tag.length, tag.length + end.index);
@@ -106,7 +115,7 @@ export async function scanCells(entry, visit, cancelled) {
       const address = properties.r ? cellAddress(properties.r) : { row, column };
       column = address.column + 1;
       if (!Number.isSafeInteger(address.row) || address.row < 0 || address.row >= 1048576 || address.column >= 16384) throw new Error('Invalid worksheet cell');
-      if (visit({ attributes: properties, content, address }) === false) return false;
+      if (visit({ attributes: properties, content, address, rowAttributes }) === false) return false;
     }
     if (buffer.length > 8 * 1024 * 1024) throw new Error('Cell exceeds safety budget');
   }, cancelled);

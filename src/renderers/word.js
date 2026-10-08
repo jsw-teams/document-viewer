@@ -4,7 +4,7 @@ import { labelPages } from '../pages.js';
 export async function render({ data, frame, signal, labels, setCleanup }) {
   const styles = frame.contentDocument.createElement('div');
   const layout = frame.contentDocument.createElement('style');
-  layout.textContent = '.docx-wrapper{align-items:flex-start!important;width:max-content;min-width:100%}';
+  layout.textContent = '.docx-wrapper{align-items:flex-start!important;width:max-content;min-width:100%}.docx-wrapper>.document-page{margin-inline:auto!important}';
   frame.contentDocument.head.append(styles);
   const markImages = node => {
     if (node.nodeType !== 1) return;
@@ -17,7 +17,9 @@ export async function render({ data, frame, signal, labels, setCleanup }) {
   try {
     await renderAsync(data, frame.contentDocument.body, styles, {
       renderAltChunks: false, useBase64URL: true, renderComments: false,
-      renderChanges: false, breakPages: true, ignoreWidth: false
+      renderChanges: false, breakPages: true, ignoreWidth: false,
+      ignoreLastRenderedPageBreak: false, experimental: true,
+      renderHeaders: true, renderFooters: true, renderFootnotes: true, renderEndnotes: true
     });
     markImages(frame.contentDocument.body);
   } finally { images.disconnect(); }

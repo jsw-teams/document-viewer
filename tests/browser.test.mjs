@@ -6,7 +6,7 @@ import { resolve, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { utils, write } from 'xlsx';
-import { pdfFixture, wordFixture, sheetFixture, slidesFixture, legacyPpt } from './fixtures.mjs';
+import { pdfFixture, wordFixture, wordLayoutFixture, sheetFixture, styledSheetFixture, slidesFixture, legacyPpt } from './fixtures.mjs';
 import JSZip from 'jszip';
 
 const output = fileURLToPath(new URL('../dist/', import.meta.url));
@@ -167,7 +167,7 @@ test('worksheet windows reach remote cells, release old DOM, preserve merges and
     await page.evaluate(() => window.mount({ src: '/large.xlsx', autoOpen: true }));
     const frame = page.frameLocator('iframe');
     await frame.getByText('Window origin', { exact: true }).waitFor();
-    assert.equal(await frame.getByText('Window origin', { exact: true }).getAttribute('colspan'), '2');
+    assert.equal(await frame.getByText('Window origin', { exact: true }).locator('..').getAttribute('colspan'), '2');
     assert.equal(await frame.getByRole('grid').getAttribute('aria-colcount'), '129');
     assert.equal(await frame.getByRole('grid').getAttribute('aria-readonly'), 'true');
     assert.equal(await page.locator('.document-viewer-mode').textContent(), '只读预览');
@@ -196,6 +196,127 @@ test('worksheet windows reach remote cells, release old DOM, preserve merges and
   } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 });
 
+test('Word preserves saved pagination, page margins, styled text, headers, footers and footnotes', { timeout: 60000 }, async () => {
+  const { server, url } = await fixtureServer(new Map([['/layout.docx', await wordLayoutFixture()]]));
+  const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
+  try {
+    const page = await browser.newPage({ viewport: { width: 320, height: 900 } });
+    await page.goto(url);
+    await page.waitForFunction(() => window.ready);
+    await page.evaluate(() => window.mount({ src: '/layout.docx', autoOpen: true }));
+    const frame = page.frameLocator('iframe');
+    await frame.getByText('Authored second page', { exact: true }).waitFor();
+    assert.equal(await frame.locator('section.docx').count(), 2);
+    assert.equal(await frame.getByText('Authored header', { exact: true }).count(), 2);
+    assert.equal(await frame.getByText('Authored footer', { exact: true }).count(), 2);
+    await frame.getByText('Authored footnote', { exact: true }).waitFor();
+    const layout = await frame.getByText('Authored first page', { exact: true }).evaluate(element => {
+      const style = getComputedStyle(element);
+      const paper = getComputedStyle(element.closest('section.docx'));
+      return { weight: style.fontWeight, color: style.color, size: style.fontSize, width: paper.width, left: paper.paddingLeft, right: paper.paddingRight };
+    });
+    assert.ok(Math.abs(parseFloat(layout.width) - 816) < 0.1);
+    delete layout.width;
+    assert.deepEqual(layout, { weight: '700', color: 'rgb(128, 0, 32)', size: '24px', left: '120px', right: '120px' });
+    assert.deepEqual(await page.evaluate(() => window.previewErrors), []);
+  } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
+test('worksheet windows preserve source rich runs, rows, inherited styles, hidden cells and calculated results', { timeout: 60000 }, async () => {
+  const { server, url } = await fixtureServer(new Map([['/styles.xlsx', await styledSheetFixture()]]));
+  const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
+  try {
+    const page = await browser.newPage();
+    await page.goto(url);
+    await page.waitForFunction(() => window.ready);
+    await page.evaluate(() => window.mount({ src: '/styles.xlsx', autoOpen: true }));
+    const frame = page.frameLocator('iframe');
+    await frame.getByText('Rich', { exact: true }).waitFor();
+    assert.equal(await frame.getByText('Hidden column', { exact: true }).count(), 0);
+    assert.equal(await frame.locator('tr[aria-rowindex="3"]').count(), 0);
+    assert.equal(await frame.getByText('Merged', { exact: true }).locator('..').getAttribute('colspan'), '2');
+    assert.equal(await frame.getByText('Rich', { exact: true }).evaluate(element => getComputedStyle(element).color), 'rgb(255, 0, 0)');
+    const sourceStyle = await frame.getByText('4.50', { exact: true }).locator('..').evaluate(element => { const style = getComputedStyle(element); return { font: style.fontFamily, size: style.fontSize, border: style.borderBottomStyle, fill: style.backgroundColor, align: style.textAlign }; });
+    assert.deepEqual(sourceStyle, { font: 'Georgia', size: '18.6667px', border: 'double', fill: 'rgb(112, 160, 207)', align: 'center' });
+    assert.equal(await frame.locator('td[data-row="4"][data-column="0"]').innerText(), '30');
+    await page.getByRole('textbox', { name: '单元格地址' }).fill('B1');
+    await page.getByRole('textbox', { name: '单元格地址' }).press('Enter');
+    assert.equal(await page.locator('.document-viewer-status').textContent(), '此单元格在原文档中已隐藏。');
+  } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
+test('PDF honors per-page CropBox/rotation and repaints sharp rasters on zoom and workspace resize', { timeout: 60000 }, async () => {
+  const { server, url } = await fixtureServer(new Map([['/mixed.pdf', pdfFixture(0, true)]]));
+  const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1000, height: 900 } });
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(url);
+    await page.waitForFunction(() => window.ready);
+    await page.evaluate(() => window.mount({ src: '/mixed.pdf', autoOpen: true }));
+    const frame = page.frameLocator('iframe');
+    await frame.locator('.pdf-page[aria-busy=false]').first().waitFor();
+    const first = frame.locator('.pdf-page').first();
+    const second = frame.locator('.pdf-page').nth(1);
+    for (const [wrapper, expected] of [[first, 1.5], [second, 1.2]]) {
+      const ratio = await wrapper.evaluate(element => parseFloat(element.style.width) / parseFloat(element.style.height));
+      assert.ok(Math.abs(ratio - expected) < 0.001);
+    }
+    const original = await first.locator('img').evaluate(element => element.naturalWidth);
+    await page.getByRole('button', { name: '放大', exact: true }).click();
+    await page.waitForFunction(width => document.querySelector('iframe').contentDocument.querySelector('.pdf-page img')?.naturalWidth > width, original);
+    await first.locator('.textLayer span').first().waitFor();
+    await page.getByRole('button', { name: '展开工作区', exact: true }).click();
+    await page.setViewportSize({ width: 600, height: 900 });
+    await first.locator('img').waitFor();
+    assert.equal(await frame.locator('canvas').count(), 0);
+    assert.equal(await page.locator('.document-viewer-status').textContent(), '');
+    assert.deepEqual(errors, []);
+    assert.deepEqual(await page.evaluate(() => window.previewErrors), []);
+  } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
+test('PPT restores authored runs and workspace expansion preserves all document frames and keyboard focus', { timeout: 120000 }, async () => {
+  const { server, requests, url } = await fixtureServer(new Map([['/styled.ppt', legacyPpt({ styled: true })]]));
+  const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
+  try {
+    const page = await browser.newPage({ viewport: { width: 780, height: 900 } });
+    await page.goto(url);
+    await page.waitForFunction(() => window.ready);
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('download', () => errors.push('Unexpected download'));
+    for (const src of ['/styled.ppt', '/report.pptx', '/report.docx', '/report.pdf', '/report.xlsx', '/report.xls']) {
+      await page.evaluate(src => window.mount({ src, autoOpen: true }), src);
+      await page.locator('#preview').evaluate(element => { element.style.width = 'min(500px,100%)'; });
+      await page.locator('.document-viewer-viewport[aria-busy=false]').waitFor();
+      if (src === '/styled.ppt') {
+        const run = page.frameLocator('iframe').locator('foreignObject p span').first();
+        assert.deepEqual(await run.evaluate(element => { const style = getComputedStyle(element); return { color: style.color, weight: style.fontWeight, font: style.fontFamily, size: style.fontSize, italic: style.fontStyle, underline: style.textDecorationLine, align: getComputedStyle(element.parentElement).textAlign }; }), { color: 'rgb(255, 0, 0)', weight: '700', font: 'Georgia, sans-serif', size: '144px', italic: 'italic', underline: 'underline', align: 'center' });
+      }
+      const count = requests.filter(path => path === src).length;
+      await page.evaluate(() => { window.originalFrame = document.querySelector('iframe'); window.originalDocument = window.originalFrame.contentDocument; });
+      await page.getByRole('button', { name: '展开工作区', exact: true }).click();
+      assert.equal(await page.getByRole('dialog').getAttribute('aria-modal'), 'true');
+      if (src === '/report.pptx') {
+        await page.waitForFunction(() => document.querySelector('iframe').contentDocument.querySelector('[data-slide-index]')?.getBoundingClientRect().width > 550);
+        assert.equal(await page.frameLocator('iframe').locator('[data-document-page] [data-document-page]').count(), 0);
+      }
+      await page.keyboard.press('Tab');
+      assert.equal(await page.evaluate(() => !!document.activeElement.closest('.document-viewer')), true);
+      await page.frameLocator('iframe').locator('body').evaluate(element => { element.tabIndex = 0; element.focus(); });
+      await page.keyboard.press('Escape');
+      assert.equal(await page.getByRole('dialog').count(), 0);
+      assert.equal(await page.getByRole('button', { name: '展开工作区', exact: true }).evaluate(element => element === document.activeElement), true);
+      assert.equal(await page.evaluate(() => window.originalFrame === document.querySelector('iframe') && window.originalDocument === window.originalFrame.contentDocument), true);
+      assert.equal(requests.filter(path => path === src).length, count);
+      await page.getByRole('button', { name: '关闭预览', exact: true }).click();
+    }
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
 test('Word pages release offscreen content and rehydrate it without executing document scripts', { timeout: 60000 }, async () => {
   const { server, url } = await fixtureServer(new Map([['/long.docx', await wordFixture(20)]]));
   const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
@@ -215,6 +336,34 @@ test('Word pages release offscreen content and rehydrate it without executing do
     await frame.locator('[data-document-page="1"]').scrollIntoViewIfNeeded();
     await frame.getByText('Word preview 中文', { exact: true }).waitFor();
     assert.equal(await frame.locator('script').count(), 0);
+  } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
+test('closing a DOC preview terminates its still-loading parser Worker and releases the frame', { timeout: 60000 }, async () => {
+  const { server, url } = await fixtureServer(new Map([['/parsing.doc', Buffer.alloc(512)]]));
+  const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
+  try {
+    const page = await browser.newPage();
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.addInitScript(() => {
+      const NativeWorker = window.Worker;
+      window.parserWorkers = [];
+      window.Worker = class extends NativeWorker {
+        constructor(url, options) { super(url, options); this.source = String(url); this.stopped = false; window.parserWorkers.push(this); }
+        terminate() { this.stopped = true; return super.terminate(); }
+      };
+    });
+    await page.route('**/doc.worker.js', async route => { await new Promise(resolve => setTimeout(resolve, 300)); try { await route.continue(); } catch {} });
+    await page.goto(url);
+    await page.waitForFunction(() => window.ready);
+    await page.evaluate(() => window.mount({ src: '/parsing.doc', autoOpen: true }));
+    await page.waitForFunction(() => window.parserWorkers.some(worker => worker.source.endsWith('/doc.worker.js')));
+    await page.evaluate(() => window.viewer.close());
+    assert.equal(await page.locator('iframe').count(), 0);
+    assert.equal(await page.evaluate(() => window.parserWorkers.every(worker => worker.stopped)), true);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(await page.evaluate(() => window.previewErrors), []);
   } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 });
 
@@ -343,15 +492,16 @@ test('themed worksheet controls support keyboard, contrast, forced colors and sa
         await page.waitForFunction(color => getComputedStyle(document.querySelector('iframe').contentDocument.body).color === color, expected, { timeout: 5000 });
         if (mode === 'custom') {
           assert.equal(await content.locator('body').evaluate(element => getComputedStyle(element).backgroundColor), 'rgb(255, 255, 0)');
-          assert.equal(await last.evaluate(element => getComputedStyle(element).backgroundColor), 'rgb(255, 209, 102)');
+          assert.equal(await last.evaluate(element => getComputedStyle(element).borderBottomColor), 'rgb(0, 42, 73)');
           await page.evaluate(() => { document.querySelector('#host-palette').textContent = 'body>a{color:rgba(30,30,30,.2)}'; });
-          await page.waitForFunction(() => getComputedStyle(document.querySelector('[aria-selected=true]')).backgroundColor === 'rgba(30, 30, 30, 0.2)', null, { timeout: 5000 });
+          await page.waitForFunction(() => getComputedStyle(document.querySelector('.document-viewer')).getPropertyValue('--dv-accent').trim() === 'rgba(30, 30, 30, 0.2)', null, { timeout: 5000 });
         }
         const audit = async scope => scope.evaluate(async () => {
           const result = await axe.run(document.querySelector('.document-viewer'), { iframes: false, runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'] } });
           return result.violations.map(issue => ({ id: issue.id, nodes: issue.nodes.map(node => node.failureSummary) }));
         });
-        assert.deepEqual(await audit(page), [], 'Parent controls at ' + width + 'px / ' + mode);
+        const issues = await audit(page);
+        assert.deepEqual(issues, [], 'Parent controls at ' + width + 'px / ' + mode);
         assert.ok(await content.locator('th[scope=col]').count());
         assert.ok(await content.locator('th[scope=row]').count());
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
@@ -373,6 +523,10 @@ test('themed worksheet controls support keyboard, contrast, forced colors and sa
 test('operator-provided Office samples render without downloads', { timeout: 120000, skip: !process.env.DOCUMENT_VIEWER_SAMPLES }, async () => {
   const names = ['sample-document-medium.doc', 'sample-document-medium.docx', 'sample-document.ppt', 'sample-presentation-10-slides.pptx', 'sample-spreadsheet-100-rows.xls', 'sample-spreadsheet-100-rows.xlsx'];
   const samples = new Map(await Promise.all(names.map(async name => ['/' + name, await readFile(resolve(process.env.DOCUMENT_VIEWER_SAMPLES, name))])));
+  if (process.env.DOCUMENT_VIEWER_PDF) {
+    names.push('sample-document-5-pages.pdf');
+    samples.set('/sample-document-5-pages.pdf', await readFile(process.env.DOCUMENT_VIEWER_PDF));
+  }
   const { server, url } = await fixtureServer(samples);
   const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
   try {
@@ -394,6 +548,17 @@ test('operator-provided Office samples render without downloads', { timeout: 120
       const text = await page.frameLocator('iframe').locator('body').innerText();
       console.log(name + ': ' + text.slice(0, 180).replaceAll('\n', ' '));
       assert.ok(text.length > 20, 'Expected real document content: ' + name);
+      if (name.endsWith('.pdf')) assert.equal(await page.frameLocator('iframe').locator('[data-document-page]').count(), 8);
+      if (name.endsWith('.doc')) assert.equal(await page.frameLocator('iframe').locator('.msdoc-root').first().evaluate(element => parseFloat(element.style.width)), 816);
+      if (name.endsWith('.xlsx')) {
+        await page.getByRole('tab', { name: 'Summary', exact: true }).click();
+        await page.frameLocator('iframe').getByText('595500', { exact: true }).waitFor();
+        const values = await page.frameLocator('iframe').locator('td[data-column="1"] .sheet-cell-content').allTextContents();
+        assert.ok(values.includes('100'));
+        assert.ok(values.includes('5955'));
+        assert.ok(values.includes('26400'));
+      }
+      if (process.env.DOCUMENT_VIEWER_SCREENSHOTS) await page.screenshot({ path: resolve(process.env.DOCUMENT_VIEWER_SCREENSHOTS, name + '.png'), fullPage: true });
       await page.getByRole('button', { name: '关闭预览', exact: true }).click();
     }
     assert.deepEqual(errors, []);
