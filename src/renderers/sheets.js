@@ -9,6 +9,7 @@ export async function render({ data, format, frame, viewport, controls, signal, 
   let observer = null;
   let selected = 0;
   let revision = 0;
+  let navigation = 0;
   let timer = null;
   let metadata = null;
   let columnOffsets = [];
@@ -19,7 +20,7 @@ export async function render({ data, format, frame, viewport, controls, signal, 
   let active = { row: 0, column: 0 };
   const visible = new Set();
   const mounted = new Map();
-  let drawing = false;
+  let drawing = null;
   let repeat = false;
   const doc = frame.contentDocument;
   const cleanup = () => {
@@ -217,10 +218,16 @@ export async function render({ data, format, frame, viewport, controls, signal, 
     table.append(caption, columns, head, body);
     return table;
   }
-  async function draw() {
-    if (!metadata || signal.aborted) return;
-    if (drawing) { repeat = true; return; }
-    drawing = true;
+  function draw() {
+    if (!metadata || signal.aborted) return Promise.resolve();
+    if (drawing) { repeat = true; return drawing; }
+    drawing = paint().finally(() => {
+      drawing = null;
+      if (repeat) { repeat = false; return draw(); }
+    });
+    return drawing;
+  }
+  async function paint() {
     const version = revision;
     try {
       for (const [index, mountedColumn] of mounted) {
@@ -254,10 +261,11 @@ export async function render({ data, format, frame, viewport, controls, signal, 
       }
       status.textContent = '';
     } catch (error) { if (!signal.aborted && error.name !== 'AbortError') status.textContent = labels.error; }
-    finally { drawing = false; if (repeat) { repeat = false; void draw(); } }
   }
   async function select(index) {
     const version = ++revision;
+    navigation++;
+    clearTimeout(timer);
     selected = index;
     metadata = null;
     observer?.disconnect();
@@ -301,7 +309,8 @@ export async function render({ data, format, frame, viewport, controls, signal, 
       observer = new IntersectionObserver(entries => {
         for (const entry of entries) {
           const current = Number(entry.target.dataset.documentPage) - 1;
-          if (entry.isIntersecting) visible.add(current); else visible.delete(current);
+          const rectangle = entry.target.getBoundingClientRect();
+          if (rectangle.bottom >= -200 && rectangle.top <= frame.clientHeight + 200) visible.add(current); else visible.delete(current);
         }
         void draw();
       }, { root: doc, rootMargin: '200px 0px' });
@@ -312,6 +321,8 @@ export async function render({ data, format, frame, viewport, controls, signal, 
     if (!metadata || target.row >= metadata.rows || target.column >= metadata.columns) { address.setAttribute('aria-invalid', 'true'); status.textContent = labels.invalidAddress; return; }
     if (hiddenRows.has(target.row) || hiddenColumns.has(target.column)) { address.setAttribute('aria-invalid', 'true'); status.textContent = labels.hiddenCell; return; }
     address.removeAttribute('aria-invalid');
+    const version = ++navigation;
+    clearTimeout(timer);
     active = target;
     address.value = columnName(target.column) + (target.row + 1);
     column = Math.max(0, Math.min(metadata.columns - 1, Math.floor(target.column / 20) * 20));
@@ -321,6 +332,7 @@ export async function render({ data, format, frame, viewport, controls, signal, 
     const zoom = parseFloat(frame.contentWindow.getComputedStyle(doc.body).zoom) || 1;
     frame.contentWindow.scrollTo(columnOffsets[column] * zoom, pages[index].getBoundingClientRect().top + frame.contentWindow.scrollY);
     await draw();
+    if (version !== navigation || signal.aborted) return;
     const cell = pages[index]?.querySelector('[data-row="' + target.row + '"][data-column="' + target.column + '"]');
     if (cell) { chooseCell(cell); cell.scrollIntoView({ block: 'nearest', inline: 'nearest' }); if (focus) cell.focus({ preventScroll: true }); }
   }

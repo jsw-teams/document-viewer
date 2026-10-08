@@ -183,6 +183,14 @@ test('worksheet windows reach remote cells, release old DOM, preserve merges and
     await address.fill('A1');
     await address.press('Enter');
     await frame.getByText('Window origin', { exact: true }).waitFor();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await address.fill('DX5001');
+      await address.press('Enter');
+      await frame.getByText('Window tail', { exact: true }).waitFor();
+      await address.fill('A1');
+      await address.press('Enter');
+      await frame.getByText('Window origin', { exact: true }).waitFor();
+    }
     await page.getByRole('tab', { name: 'Small', exact: true }).click();
     await frame.getByText('Another sheet', { exact: true }).waitFor();
     assert.equal(await frame.locator('[data-document-page]').count(), 1);
