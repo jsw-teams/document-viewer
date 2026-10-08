@@ -1,6 +1,7 @@
 # Document viewer development
 
 - Keep this a reusable browser-only library. No LibreOffice, conversion servers, accounts, uploads, analytics, CDN runtime or browser persistent storage.
+- Use continuous separated pages, not previous/next document buttons. Preserve readable text when a legacy PPT shape cannot display it. Parse untrusted HTML in an offscreen inert document before importing sanitized nodes into the script-disabled frame; never grant allow-scripts to suppress warnings.
 - Open previews automatically by default without moving focus; callers can set autoOpen: false for explicit activation. Abort and dispose on close. Respect caller consent and CSP before any request. Do not expose original-download links or legacy PPT warning notes in the viewer UI.
 - Isolate document-generated HTML in a script-disabled sandbox. Block external resources; never execute macros, formulas or document scripts.
 - Bundle dependencies, workers, WASM, fonts and original licenses locally. Fingerprint the dependency graph in integrating sites.
