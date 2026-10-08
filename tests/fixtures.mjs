@@ -44,7 +44,7 @@ export function legacyPpt({ cycle = false, brokenReference = false, encrypted = 
   return Buffer.from(CFB.write(file, { type: 'buffer' }));
 }
 
-export function pdfFixture() {
+export function pdfFixture(padding = 0) {
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>',
@@ -54,6 +54,7 @@ export function pdfFixture() {
     '<< /Length 55 >>\nstream\nBT /F1 24 Tf 50 300 Td (Document preview page two) Tj ET\nendstream',
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'
   ];
+  if (padding) objects.push('<< /Length ' + padding + ' >>\nstream\n' + 'x'.repeat(padding) + '\nendstream');
   let data = '%PDF-1.7\n';
   const offsets = [0];
   for (const [index, object] of objects.entries()) {
@@ -61,16 +62,17 @@ export function pdfFixture() {
     data += `${index + 1} 0 obj\n${object}\nendobj\n`;
   }
   const start = Buffer.byteLength(data);
-  data += 'xref\n0 8\n0000000000 65535 f \n' + offsets.slice(1).map(offset => String(offset).padStart(10, '0') + ' 00000 n \n').join('');
-  data += `trailer\n<< /Size 8 /Root 1 0 R >>\nstartxref\n${start}\n%%EOF\n`;
+  data += 'xref\n0 ' + (objects.length + 1) + '\n0000000000 65535 f \n' + offsets.slice(1).map(offset => String(offset).padStart(10, '0') + ' 00000 n \n').join('');
+  data += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${start}\n%%EOF\n`;
   return Buffer.from(data);
 }
 
-export async function wordFixture() {
+export async function wordFixture(count = 1) {
   const zip = new JSZip();
   zip.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
   zip.file('_rels/.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
-  zip.file('word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Word preview 中文</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:body></w:document>');
+  const paragraphs = Array.from({ length: count }, (_, index) => '<w:p><w:r>' + (index ? '<w:br w:type="page"/>' : '') + '<w:t>' + (index ? 'Word page ' + (index + 1) : 'Word preview 中文') + '</w:t></w:r></w:p>').join('');
+  zip.file('word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' + paragraphs + '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:body></w:document>');
   return zip.generateAsync({ type: 'nodebuffer' });
 }
 

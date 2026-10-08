@@ -1,9 +1,11 @@
 import { documentFormat, documentUrl } from './formats.js';
 import { documentLabels } from './language.js';
 import { documentFrame } from './frame.js';
-import { readDocument } from './read.js';
+import { readDocument, readPdfDocument } from './read.js';
 import { validateOfficeZip } from './zip-limits.js';
 import { followTheme } from './theme.js';
+import { previewChrome } from './chrome.js';
+import { windowDocumentPages } from './windowed-pages.js';
 
 export { documentFormat, documentUrl, documentLabels };
 
@@ -26,13 +28,24 @@ export function mountDocument(container, options) {
   if (!format) throw new Error('Unsupported document format; supply format for extensionless URLs');
   const labels = { ...documentLabels(options.locale || document.documentElement.lang), ...options.labels };
   const title = String(options.title || decodeURIComponent(source.pathname.split('/').pop()) || format.toUpperCase());
-  const maxBytes = options.maxBytes ?? 50 * 1024 * 1024;
+  const maxBytes = options.maxBytes ?? (format === 'pdf' ? 1024 : 50) * 1024 * 1024;
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new Error('maxBytes must be a positive integer');
   const root = document.createElement('section');
   root.className = 'document-viewer';
+  root.dataset.format = format;
   root.setAttribute('aria-label', title);
   const heading = document.createElement('strong');
   heading.textContent = title;
+  const header = document.createElement('div');
+  header.className = 'document-viewer-header';
+  const badge = document.createElement('span');
+  badge.className = 'document-viewer-format';
+  badge.textContent = format.toUpperCase();
+  badge.hidden = title.trim().toUpperCase() === format.toUpperCase();
+  const mode = document.createElement('span');
+  mode.className = 'document-viewer-mode';
+  mode.textContent = labels.readOnly;
+  header.append(badge, heading, mode);
   const toolbar = document.createElement('div');
   toolbar.className = 'document-viewer-toolbar';
   const status = document.createElement('p');
@@ -52,7 +65,7 @@ export function mountDocument(container, options) {
   closeButton.textContent = labels.close;
   closeButton.hidden = true;
   toolbar.append(previewButton, closeButton);
-  root.append(heading, toolbar, status, viewport);
+  root.append(header, toolbar, status, viewport);
   container.replaceChildren(root);
   const stopTheme = followTheme(root, container);
   const controls = document.createElement('div');
@@ -98,17 +111,22 @@ export function mountDocument(container, options) {
     };
     try {
       const [data, renderer, frame] = await Promise.all([
-        readDocument(preview.href, signal, maxBytes), renderers[format](), documentFrame(viewport, title, signal)
+        (format === 'pdf' ? readPdfDocument : readDocument)(preview.href, signal, maxBytes), renderers[format](), documentFrame(viewport, title, signal)
       ]);
       signal.throwIfAborted();
       frame.contentDocument.addEventListener('keydown', event => {
         if (event.key === 'Escape') { event.preventDefault(); close(); }
       }, { signal });
-      if (['docx', 'pptx', 'xlsx'].includes(format)) validateOfficeZip(data);
-      const cleanup = await renderer.render({ data, frame, viewport, controls, signal, labels, status,
+      if (['docx', 'pptx'].includes(format)) validateOfficeZip(data);
+      const cleanup = await renderer.render({ data, format, frame, viewport, controls, signal, labels, status,
         setCleanup: callback => { session.cleanup = callback; }, guard });
       if (active !== session) { cleanup?.(); return; }
       session.cleanup = cleanup;
+      const disposeRenderer = cleanup;
+      const disposePages = ['doc', 'docx', 'ppt'].includes(format) ? await windowDocumentPages(frame, signal) : null;
+      if (active !== session) { disposePages?.(); return; }
+      const disposeChrome = previewChrome({ root, toolbar, frame, signal, labels });
+      session.cleanup = () => { disposeChrome(); disposePages?.(); disposeRenderer?.(); };
       viewport.setAttribute('aria-busy', 'false');
       if (status.textContent === labels.loading) status.textContent = '';
     } catch (error) {

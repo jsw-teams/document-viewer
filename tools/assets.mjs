@@ -36,6 +36,7 @@ export async function documentViewerAssets(prefix = 'document-viewer') {
   const output = resolve(root, '.bundle');
   const bundled = await build({ entryPoints: { index: resolve(root, 'src/index.js'),
     'ppt.worker': resolve(root, 'src/ppt/worker.js'),
+    'sheets.worker': resolve(root, 'src/sheets/worker.js'),
     'pdf.worker': require.resolve('pdfjs-dist/build/pdf.worker.mjs') },
     outdir: output, bundle: true, splitting: true, minify: true, write: false,
     format: 'esm', target: 'es2022', chunkNames: 'chunks/[name]-[hash]', legalComments: 'eof',
@@ -51,7 +52,8 @@ export async function documentViewerAssets(prefix = 'document-viewer') {
     ['pptx-renderer', resolve(dirname(require.resolve('@aiden0z/pptx-renderer')), '../LICENSE')],
     ['SheetJS', resolve(dirname(require.resolve('xlsx')), 'LICENSE')],
     ['legacy-doc', resolve(dirname(require.resolve('@file-viewer/doc')), '../LICENSE')],
-    ['cfb', resolve(dirname(require.resolve('cfb')), 'LICENSE')]
+    ['cfb', resolve(dirname(require.resolve('cfb')), 'LICENSE')],
+    ['fflate', resolve(dirname(require.resolve('fflate/package.json')), 'LICENSE')]
   ];
   for (const [name, source] of licenses) assets.push({ path: prefix + '/licenses/' + name + '.txt', source, sourceName: 'Renderer licenses' });
   return assets;

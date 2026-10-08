@@ -11,9 +11,9 @@ Browser-only inline document previews for static sites and shared document URLs.
 | DOC | MS-DOC browser parser |
 | PPTX | Browser-native slide renderer |
 | PPT | Project-owned MS-PPT parser and basic SVG/text preview, without a watermark |
-| XLSX / XLS | SheetJS, worksheet switching and formatted cell values |
+| XLSX / XLS | Windowed worksheets, styled tabs, cell addresses, cached values and number formats |
 
-Office preview is not a pixel-perfect replacement for Office. Macros, linked external resources, scripts and spreadsheet formula evaluation are not enabled. Spreadsheet previews show up to 1,000 rows and 100 columns per worksheet. Password-protected files and unsupported document features show an error. The viewer exposes no original-file download links.
+Office preview is not a pixel-perfect replacement for Office. Macros, linked external resources, scripts and spreadsheet formula evaluation are not enabled. Worksheets are not truncated to an arbitrary number of rows or columns: scroll or enter a cell address to visit the complete used range. Password-protected files and unsupported document features show an error. The viewer exposes no editing or original-file download controls.
 
 Legacy PPT uses this project's own parser, disposable Worker and renderer. The only container dependency is the Apache-2.0 `cfb` OLE reader, not a slide engine. No proprietary PPT engine or watermark assets are included. This implementation follows public Microsoft MS-PPT/MS-ODRAW definitions without copying protected engine code. See `NOTICE.md` for dependency licenses.
 
@@ -27,7 +27,13 @@ The explicit `fUsefFitShapeToText` / `fFitShapeToText` flags in [MS-ODRAW Text B
 
 ## Continuous pages
 
-Documents scroll through separated, numbered pages rather than previous/next controls. Word uses authored page breaks, presentations use slide boundaries, and spreadsheets split the selected worksheet into 50-row pages while retaining worksheet tabs. PDF pages render near the scroll viewport and release distant rasters when the cache exceeds eight pages or 32 million pixels. The sandbox stays script-disabled; renderers and observers run in the parent page. Legacy Word HTML is parsed into an inert template and stripped of executable elements and event attributes before insertion.
+Documents scroll through separated, numbered pages rather than previous/next controls. Word uses authored page breaks, presentations use slide boundaries, and spreadsheets split the selected worksheet into 50-row pages. The read-only Office-inspired chrome provides the document title once, a format marker, zoom/fit controls and page position. Worksheets have a bottom tab strip, a cell-address box and a value/formula bar; selecting a formula displays its saved expression without executing it.
+
+PDF requests 64 KiB HTTP byte ranges when the source supports them and exposes Content-Range through CORS. Automatic full-file prefetch is disabled. Distant rasters and text layers are removed immediately, canvas backing stores are cleared after encoding, and the active raster budget stays at eight pages / 32 million pixels. Unsupported range servers fall back to a bounded full read. PPTX uses the upstream renderer's windowed mount/unmount lifecycle with limited overscan. Word and legacy PPT discard distant DOM and decoded images; compact gzip page representations restore content when revisited, without retaining hidden DOM trees. The sandbox stays script-disabled, including restored pages.
+
+XLSX is scanned in a disposable Worker using streaming DEFLATE/XML, retaining only requested cells and the shared strings those cells reference. No complete expanded worksheet or shared-string table is cached. The UI retains at most five 50-row/20-column windows; horizontal scrolling and cell addresses can reach the remaining columns. Numeric/date formats, inline/shared text, cached formulas, basic explicit font/fill/alignment and merged cells are preserved. Merged cells crossing a window retain their source anchor. Switching worksheets disposes the previous window. XLS uses SheetJS to parse only the selected sheet inside the Worker and discards that parsed workbook after returning the requested window.
+
+These are rendering-memory optimizations, not a claim of constant total memory for every format. Compressed Office source bytes, metadata and compact page representations remain necessary to revisit content. Word/PPTX still require an initial parse/layout; legacy XLS can have a significant per-sheet parsing peak. Closing aborts requests, terminates Workers and releases all component-owned resources. Malformed archives, huge individual XML elements and decompression bombs still have safety budgets; those budgets must not be confused with truncating legitimate worksheet ranges.
 
 It is **not** a complete replacement for a mature Office renderer: animations, charts, master/style inheritance, grouped-coordinate transforms, complete text-run formatting, gradients, arbitrary paths, OLE, EMF/WMF and encrypted PPT are unsupported. These technical boundaries are documented here rather than displayed as a warning in the viewer. Extracted text without a supported positioned shape remains readable below the slide.
 
@@ -72,7 +78,7 @@ mountDocument(container, {
 - `src` must be a direct file URL, not a sharing HTML page. Extensionless URLs require `format`: `pdf`, `doc`, `docx`, `ppt`, `pptx`, `xls` or `xlsx`.
 - The file server must allow CORS for the viewing site's origin. No proxy is created to bypass CORS. Fetches omit credentials and referrers; redirects are rejected to prevent an unapproved origin receiving a signed URL. Resolve sharing links to their authorized final download URL through the caller's consent-controlled integration.
 - Metadata resolution, authentication and share permissions belong to the calling app. Do not put secret tokens in static pages. Optional `previewSrc` selects an independently prepared preview; neither URL is exposed as a download link.
-- `maxBytes` defaults to 50 MiB. Office ZIP previews also enforce entry-count and expanded-size limits. `canLoad` is checked immediately before preview; the caller must call `close()` when consent or access is revoked.
+- `maxBytes` defaults to 50 MiB for Office and 1 GiB for range-served PDF. PDF servers without usable ranges remain bounded to a 50 MiB full read. Office ZIP previews enforce entry-count and expanded-size safety budgets; streamed XLSX parts permit larger expanded sheets without allocating their complete XML. `canLoad` is checked immediately before preview; the caller must call `close()` when consent or access is revoked.
 
 ## CSP and caching
 

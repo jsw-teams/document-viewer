@@ -1,6 +1,7 @@
 # Document viewer development
 
 - Keep this a reusable browser-only library. No LibreOffice, conversion servers, accounts, uploads, analytics, CDN runtime or browser persistent storage.
+- Read-only Office-style controls must be theme-matched semantic controls, with one title, accessible worksheet tabs, cell/value inspection and no fake editing ribbon. Never restore row/column truncation as a memory strategy. Evict distant rendering resources, cancel stale work and distinguish bounded rendering from format-specific initial parse/source-memory requirements in documentation and tests.
 - Use continuous separated pages, not previous/next document buttons. Preserve readable text when a legacy PPT shape cannot display it. Parse untrusted HTML in an offscreen inert document before importing sanitized nodes into the script-disabled frame; never grant allow-scripts to suppress warnings.
 - Open previews automatically by default without moving focus; callers can set autoOpen: false for explicit activation. Abort and dispose on close. Respect caller consent and CSP before any request. Do not expose original-download links or legacy PPT warning notes in the viewer UI.
 - Isolate document-generated HTML in a script-disabled sandbox. Block external resources; never execute macros, formulas or document scripts.

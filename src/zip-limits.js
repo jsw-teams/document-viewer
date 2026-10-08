@@ -1,4 +1,4 @@
-export function validateOfficeZip(data) {
+export function validateOfficeZip(data, streaming = false) {
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
   let footer = -1;
   for (let offset = data.byteLength - 22; offset >= Math.max(0, data.byteLength - 65557); offset--) {
@@ -13,7 +13,7 @@ export function validateOfficeZip(data) {
     if (offset + 46 > footer || view.getUint32(offset, true) !== 0x02014b50) throw new Error('Invalid Office ZIP directory');
     const size = view.getUint32(offset + 24, true);
     total += size;
-    if (size > 32 * 1024 * 1024 || total > 128 * 1024 * 1024 || (view.getUint16(offset + 8, true) & 1)) {
+    if (size > (streaming ? 512 : 32) * 1024 * 1024 || total > (streaming ? 1024 : 128) * 1024 * 1024 || (view.getUint16(offset + 8, true) & 1)) {
       throw new Error('Encrypted or oversized Office archive');
     }
     offset += 46 + view.getUint16(offset + 28, true) + view.getUint16(offset + 30, true) + view.getUint16(offset + 32, true);

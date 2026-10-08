@@ -16,6 +16,7 @@
     "cfb": "1.2.2",
     "docx-preview": "0.4.1",
     "esbuild": "^0.28.2",
+    "fflate": "0.8.3",
     "pdfjs-dist": "6.4.299",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },

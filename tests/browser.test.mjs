@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { utils, write } from 'xlsx';
 import { pdfFixture, wordFixture, sheetFixture, slidesFixture, legacyPpt } from './fixtures.mjs';
 
 const output = fileURLToPath(new URL('../dist/', import.meta.url));
@@ -18,6 +19,7 @@ async function fixtureServer(provided = new Map()) {
   ]);
   for (const [path, bytes] of provided) fixtures.set(path, bytes);
   const requests = [];
+  const ranges = [];
   const server = createServer(async (request, response) => {
     const path = new URL(request.url, 'http://local.invalid').pathname;
     requests.push(path);
@@ -43,7 +45,18 @@ async function fixtureServer(provided = new Map()) {
       response.end(await readFile(new URL('../src/safe-html.js', import.meta.url)));
       return;
     }
-    if (fixtures.has(path)) { response.end(fixtures.get(path)); return; }
+    if (fixtures.has(path)) {
+      const bytes = fixtures.get(path);
+      const range = path === '/ranged.pdf' && request.headers.range?.match(/^bytes=(\d+)-(\d+)$/);
+      if (range) {
+        const begin = Number(range[1]);
+        const end = Math.min(bytes.length - 1, Number(range[2]));
+        ranges.push({ begin, end });
+        response.writeHead(206, { 'Content-Range': 'bytes ' + begin + '-' + end + '/' + bytes.length, 'Content-Length': end - begin + 1, ETag: '"fixture"' });
+        response.end(bytes.subarray(begin, end + 1));
+      } else response.end(bytes);
+      return;
+    }
     try {
       const file = resolve(output, '.' + path);
       if (!file.startsWith(output)) throw new Error('Invalid path');
@@ -53,7 +66,7 @@ async function fixtureServer(provided = new Map()) {
     } catch { response.statusCode = 404; response.end('Not found'); }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  return { server, requests, url: 'http://127.0.0.1:' + server.address().port };
+  return { server, requests, ranges, url: 'http://127.0.0.1:' + server.address().port };
 }
 
 test('automatic preview respects consent, avoids focus theft and exposes no download links', { timeout: 20000 }, async () => {
@@ -75,6 +88,94 @@ test('automatic preview respects consent, avoids focus theft and exposes no down
     assert.deepEqual(errors, []);
     await page.evaluate(() => window.viewer.destroy());
     assert.equal(await page.locator('iframe').count(), 0);
+  } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
+test('worksheet windows reach remote cells, release old DOM, preserve merges and styled read-only chrome', { timeout: 60000 }, async () => {
+  const workbook = utils.book_new();
+  const sheet = { A1: { t: 's', v: 'Window origin' }, DX5001: { t: 's', v: 'Window tail' }, '!ref': 'A1:DX5001', '!merges': [{ s: { r: 0, c: 0 }, e: { r: 0, c: 1 } }] };
+  utils.book_append_sheet(workbook, sheet, 'Large');
+  utils.book_append_sheet(workbook, utils.aoa_to_sheet([['Another sheet']]), 'Small');
+  const { server, url } = await fixtureServer(new Map([['/large.xlsx', write(workbook, { type: 'buffer', bookType: 'xlsx', bookSST: true, compression: true })]]));
+  const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
+  try {
+    const page = await browser.newPage({ viewport: { width: 320, height: 900 } });
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(url);
+    await page.waitForFunction(() => window.ready);
+    await page.evaluate(() => window.mount({ src: '/large.xlsx', autoOpen: true }));
+    const frame = page.frameLocator('iframe');
+    await frame.getByText('Window origin', { exact: true }).waitFor();
+    assert.equal(await frame.getByText('Window origin', { exact: true }).getAttribute('colspan'), '2');
+    assert.equal(await page.locator('.document-viewer-mode').textContent(), '只读预览');
+    const address = page.getByRole('textbox', { name: '单元格地址' });
+    await address.fill('DX5001');
+    await address.press('Enter');
+    await frame.getByText('Window tail', { exact: true }).waitFor();
+    await frame.getByText('Window tail', { exact: true }).click();
+    assert.equal(await page.locator('.document-viewer-formula output').textContent(), 'Window tail');
+    await page.waitForFunction(() => !document.querySelector('iframe').contentDocument.body.textContent.includes('Window origin'));
+    assert.ok(await frame.locator('td[data-row]').count() <= 5000);
+    assert.equal(await frame.locator('[data-document-page]').count(), 101);
+    await address.fill('A1');
+    await address.press('Enter');
+    await frame.getByText('Window origin', { exact: true }).waitFor();
+    await page.getByRole('tab', { name: 'Small', exact: true }).click();
+    await frame.getByText('Another sheet', { exact: true }).waitFor();
+    assert.equal(await frame.locator('[data-document-page]').count(), 1);
+    await page.getByRole('button', { name: '放大', exact: true }).click();
+    assert.equal(await page.locator('.document-viewer-view-tools output').textContent(), '125%');
+    await page.getByRole('button', { name: '适合宽度', exact: true }).click();
+    assert.equal(await page.locator('.document-viewer-view-tools output').textContent(), '100%');
+    assert.deepEqual(errors, []);
+    await page.evaluate(() => window.viewer.destroy());
+    assert.equal(await page.locator('.document-viewer-sheet-footer').count(), 0);
+  } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
+test('Word pages release offscreen content and rehydrate it without executing document scripts', { timeout: 60000 }, async () => {
+  const { server, url } = await fixtureServer(new Map([['/long.docx', await wordFixture(20)]]));
+  const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
+  try {
+    const page = await browser.newPage();
+    await page.goto(url);
+    await page.waitForFunction(() => window.ready);
+    await page.evaluate(() => window.mount({ src: '/long.docx', autoOpen: true }));
+    const frame = page.frameLocator('iframe');
+    await page.locator('.document-viewer-viewport[aria-busy="false"]').waitFor();
+    assert.equal(await frame.locator('[data-document-page]').count(), 20);
+    assert.ok(await frame.locator('section.docx').count() < 5);
+    await frame.locator('[data-document-page="20"]').scrollIntoViewIfNeeded();
+    await frame.getByText('Word page 20', { exact: true }).waitFor();
+    await page.waitForFunction(() => !document.querySelector('iframe').contentDocument.body.textContent.includes('Word preview 中文'));
+    assert.ok(await frame.locator('section.docx').count() < 5);
+    await frame.locator('[data-document-page="1"]').scrollIntoViewIfNeeded();
+    await frame.getByText('Word preview 中文', { exact: true }).waitFor();
+    assert.equal(await frame.locator('script').count(), 0);
+  } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
+test('PDF range transport previews without transferring the whole file and evicts distant rasters', { timeout: 60000 }, async () => {
+  const bytes = pdfFixture(8 * 1024 * 1024);
+  const { server, ranges, url } = await fixtureServer(new Map([['/ranged.pdf', bytes]]));
+  const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
+  try {
+    const page = await browser.newPage();
+    await page.goto(url);
+    await page.waitForFunction(() => window.ready);
+    await page.evaluate(() => window.mount({ src: '/ranged.pdf', autoOpen: true }));
+    const frame = page.frameLocator('iframe');
+    await frame.getByText('Document preview page one', { exact: true }).waitFor();
+    assert.ok(ranges.length >= 2);
+    assert.ok(ranges.reduce((total, range) => total + range.end - range.begin + 1, 0) < bytes.length / 4);
+    await page.locator('.document-viewer-viewport').evaluate(element => { element.style.height = '180px'; });
+    await frame.locator('body').evaluate(element => { element.ownerDocument.defaultView.scrollTo(0, element.scrollHeight); });
+    await frame.getByText('Document preview page two', { exact: true }).waitFor();
+    await page.waitForFunction(() => !document.querySelector('iframe').contentDocument.querySelector('[data-document-page="1"] img'));
+    await frame.locator('[data-document-page="1"]').scrollIntoViewIfNeeded();
+    await frame.getByText('Document preview page one', { exact: true }).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.previewErrors), []);
   } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 });
 

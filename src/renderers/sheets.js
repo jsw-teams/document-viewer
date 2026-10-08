@@ -1,19 +1,85 @@
-import { read, utils } from 'xlsx';
 import { documentPage } from '../pages.js';
+import { cellAddress, columnName } from '../sheets/xml.js';
 
-export async function render({ data, frame, viewport, controls, signal, labels, status, guard }) {
-  const workbook = read(data, { type: 'array', sheetRows: 1001, cellHTML: false, cellStyles: false, bookVBA: false });
+export async function render({ data, format, frame, viewport, controls, signal, labels, status, setCleanup }) {
+  const worker = new Worker(new URL('../sheets.worker.js', import.meta.url), { type: 'module' });
+  let identifier = 0;
+  const pending = new Map();
+  let observer = null;
+  let selected = 0;
+  let revision = 0;
+  let timer = null;
+  let metadata = null;
+  let pages = [];
+  let column = 0;
+  let active = { row: 0, column: 0 };
+  const visible = new Set();
+  const mounted = new Map();
+  let drawing = false;
+  let repeat = false;
+  const doc = frame.contentDocument;
+  const cleanup = () => {
+    revision++;
+    clearTimeout(timer);
+    observer?.disconnect();
+    worker.terminate();
+    for (const request of pending.values()) request.reject(new DOMException('Worksheet closed', 'AbortError'));
+    pending.clear();
+    mounted.clear();
+    pages = [];
+    metadata = null;
+  };
+  worker.onmessage = ({ data: response }) => {
+    const request = pending.get(response.id);
+    if (!request) return;
+    pending.delete(response.id);
+    if (response.error) request.reject(new Error(response.error));
+    else request.resolve(response.result);
+  };
+  worker.onerror = () => { for (const request of pending.values()) request.reject(new Error('Worksheet worker failed')); pending.clear(); };
+  function request(action, fields = {}, transfer = []) {
+    signal.throwIfAborted();
+    for (const previous of pending.values()) previous.reject(new DOMException('Superseded worksheet request', 'AbortError'));
+    pending.clear();
+    const id = ++identifier;
+    return new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+      worker.postMessage({ action, id, ...fields }, transfer);
+    });
+  }
+  setCleanup(cleanup);
+  const names = await request('open', { buffer: data.buffer, format }, [data.buffer]);
   signal.throwIfAborted();
-  if (!workbook.SheetNames.length) throw new Error('Empty workbook');
+  if (!names.length) throw new Error('Empty workbook');
+  const formulaBar = document.createElement('form');
+  formulaBar.className = 'document-viewer-formula';
+  formulaBar.noValidate = true;
+  const address = document.createElement('input');
+  address.type = 'text';
+  address.value = 'A1';
+  address.setAttribute('aria-label', labels.cellAddress);
+  address.autocomplete = 'off';
+  address.spellcheck = false;
+  const jump = document.createElement('button');
+  jump.type = 'submit';
+  jump.textContent = labels.go;
+  const value = document.createElement('output');
+  value.setAttribute('aria-label', labels.cellValue);
+  formulaBar.append(address, jump, value);
+  controls.append(formulaBar);
   const tabs = document.createElement('div');
   tabs.className = 'document-viewer-sheets';
   tabs.setAttribute('role', 'tablist');
   tabs.setAttribute('aria-label', labels.sheet);
+  const footer = document.createElement('div');
+  footer.className = 'document-viewer-sheet-footer';
+  const dimensions = document.createElement('span');
+  footer.append(tabs, dimensions);
+  viewport.after(footer);
+  setCleanup(() => { cleanup(); footer.remove(); });
   viewport.setAttribute('role', 'tabpanel');
   viewport.tabIndex = 0;
-  controls.append(tabs);
-  let selected = 0;
-  const buttons = workbook.SheetNames.map((name, index) => {
+  const buttons = names.map((name, index) => {
     const button = document.createElement('button');
     button.type = 'button';
     button.id = viewport.id + '-sheet-' + index;
@@ -23,68 +89,219 @@ export async function render({ data, frame, viewport, controls, signal, labels, 
     tabs.append(button);
     return button;
   });
-  const draw = guard(() => {
-    const sheet = workbook.Sheets[workbook.SheetNames[selected]];
-    const range = utils.decode_range(sheet['!ref'] || 'A1');
-    const truncated = !!sheet['!fullref'] || range.e.r - range.s.r >= 1000 || range.e.c - range.s.c >= 100;
-    range.e.r = Math.min(range.e.r, range.s.r + 999);
-    range.e.c = Math.min(range.e.c, range.s.c + 99);
-    frame.contentDocument.body.replaceChildren();
-    const pageCount = Math.ceil((range.e.r - range.s.r + 1) / 50);
-    for (let start = range.s.r; start <= range.e.r; start += 50) {
-      const page = documentPage(frame.contentDocument, labels, (start - range.s.r) / 50, pageCount);
-      const table = frame.contentDocument.createElement('table');
-      const caption = frame.contentDocument.createElement('caption');
-      caption.textContent = workbook.SheetNames[selected];
-      const head = frame.contentDocument.createElement('thead');
-      const headings = frame.contentDocument.createElement('tr');
-      const corner = frame.contentDocument.createElement('td');
-      headings.append(corner);
-      for (let column = range.s.c; column <= range.e.c; column++) {
-        const heading = frame.contentDocument.createElement('th');
-        heading.scope = 'col';
-        heading.textContent = utils.encode_col(column);
-        headings.append(heading);
-      }
-      head.append(headings);
-      const body = frame.contentDocument.createElement('tbody');
-      for (let row = start; row <= Math.min(range.e.r, start + 49); row++) {
-        const line = frame.contentDocument.createElement('tr');
-        const heading = frame.contentDocument.createElement('th');
-        heading.scope = 'row';
-        heading.textContent = String(row + 1);
-        line.append(heading);
-        for (let column = range.s.c; column <= range.e.c; column++) {
-          const cell = frame.contentDocument.createElement('td');
-          const value = sheet[utils.encode_cell({ r: row, c: column })];
-          cell.textContent = value ? utils.format_cell(value) : '';
-          line.append(cell);
-        }
-        body.append(line);
-      }
-      table.append(caption, head, body);
-      page.append(table);
-      frame.contentDocument.body.append(page);
+  const stylesheet = doc.createElement('style');
+  stylesheet.textContent = '.sheet-page{height:1470px;overflow:hidden;position:relative}.sheet-page:last-child{height:auto;min-height:100px}.sheet-grid{border-collapse:collapse!important;table-layout:fixed;display:table!important;font-size:14px}.sheet-grid th,.sheet-grid td{height:28px;max-height:28px;padding:3px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:1px solid var(--document-viewer-line);line-height:20px}.sheet-grid td{cursor:cell}.sheet-grid td[aria-selected=true]{outline:2px solid var(--document-viewer-accent);outline-offset:-2px}.sheet-grid th{position:static}.sheet-grid .sheet-spacer{padding:0;border:0}.sheet-grid caption{text-align:start;height:32px}.sheet-grid col{width:120px}.sheet-grid col:first-child{width:48px}.sheet-page>h2{position:sticky;inset-inline-start:0;width:fit-content}.sheet-page table{overflow:visible}';
+  doc.head.append(stylesheet);
+  function chooseCell(cell) {
+    active = { row: Number(cell.dataset.row), column: Number(cell.dataset.column) };
+    address.value = columnName(active.column) + (active.row + 1);
+    value.textContent = cell.dataset.formula ? '=' + cell.dataset.formula : cell.textContent;
+    for (const node of doc.querySelectorAll('[aria-selected=true]')) node.removeAttribute('aria-selected');
+    cell.setAttribute('aria-selected', 'true');
+    cell.tabIndex = 0;
+  }
+  function tableFor(index, cells) {
+    const table = doc.createElement('table');
+    table.className = 'sheet-grid';
+    table.style.width = (48 + metadata.columns * 120) + 'px';
+    const caption = doc.createElement('caption');
+    caption.textContent = names[selected];
+    const start = index * 50;
+    const end = Math.min(metadata.rows - 1, start + 49);
+    const endColumn = Math.min(metadata.columns - 1, column + 19);
+    const merges = metadata.merges.filter(item => item.s.r <= end && item.e.r >= start && item.s.c <= endColumn && item.e.c >= column);
+    const values = new Map(cells.map(cell => [cell.row + ':' + cell.column, cell]));
+    const head = doc.createElement('thead');
+    const headings = doc.createElement('tr');
+    headings.append(doc.createElement('td'));
+    const spacer = (line, width) => {
+      if (!width) return;
+      const node = doc.createElement('td');
+      node.className = 'sheet-spacer';
+      node.style.width = width + 'px';
+      node.setAttribute('aria-hidden', 'true');
+      line.append(node);
+    };
+    const columns = doc.createElement('colgroup');
+    columns.append(doc.createElement('col'));
+    const addColumn = width => { const node = doc.createElement('col'); node.style.width = width + 'px'; columns.append(node); };
+    if (column) addColumn(column * 120);
+    spacer(headings, column * 120);
+    for (let current = column; current <= endColumn; current++) {
+      addColumn(120);
+      const heading = doc.createElement('th');
+      heading.scope = 'col';
+      heading.textContent = columnName(current);
+      headings.append(heading);
     }
-    frame.contentWindow.scrollTo(0, 0);
-    buttons.forEach((button, index) => {
-      button.setAttribute('aria-selected', String(index === selected));
-      button.tabIndex = index === selected ? 0 : -1;
-    });
-    viewport.setAttribute('aria-labelledby', buttons[selected].id);
-    status.textContent = truncated ? labels.limited : '';
+    const remaining = (metadata.columns - endColumn - 1) * 120;
+    if (remaining) addColumn(remaining);
+    spacer(headings, remaining);
+    head.append(headings);
+    const body = doc.createElement('tbody');
+    for (let row = start; row <= end; row++) {
+      const line = doc.createElement('tr');
+      const heading = doc.createElement('th');
+      heading.scope = 'row';
+      heading.textContent = String(row + 1);
+      line.append(heading);
+      spacer(line, column * 120);
+      for (let current = column; current <= endColumn; current++) {
+        const merge = merges.find(item => row >= item.s.r && row <= item.e.r && current >= item.s.c && current <= item.e.c);
+        const firstRow = merge ? Math.max(start, merge.s.r) : row;
+        const firstColumn = merge ? Math.max(column, merge.s.c) : current;
+        if (merge && (row !== firstRow || current !== firstColumn)) continue;
+        const node = doc.createElement('td');
+        node.dataset.row = String(row);
+        node.dataset.column = String(current);
+        const cell = values.get((merge?.s.r ?? row) + ':' + (merge?.s.c ?? current));
+        node.textContent = cell?.text || '';
+        node.dataset.formula = cell?.formula || '';
+        node.tabIndex = -1;
+        const style = cell?.style || {};
+        if (style.bold) node.style.fontWeight = '700';
+        if (style.italic) node.style.fontStyle = 'italic';
+        if (style.color) node.style.color = style.color;
+        if (style.background) node.style.background = style.background;
+        if (style.align) node.style.textAlign = style.align;
+        if (merge) { node.rowSpan = Math.min(end, merge.e.r) - firstRow + 1; node.colSpan = Math.min(endColumn, merge.e.c) - firstColumn + 1; }
+        node.addEventListener('click', () => { chooseCell(node); node.focus({ preventScroll: true }); });
+        if (row === active.row && current === active.column) chooseCell(node);
+        line.append(node);
+      }
+      spacer(line, remaining);
+      body.append(line);
+    }
+    table.append(caption, columns, head, body);
+    return table;
+  }
+  async function draw() {
+    if (!metadata || signal.aborted) return;
+    if (drawing) { repeat = true; return; }
+    drawing = true;
+    const version = revision;
+    try {
+      for (const [index, mountedColumn] of mounted) {
+        if (!visible.has(index) || mountedColumn !== column) {
+          pages[index].querySelector('table')?.remove();
+          pages[index].setAttribute('aria-busy', 'true');
+          mounted.delete(index);
+        }
+      }
+      for (const index of [...visible].slice(0, 5)) {
+        if (mounted.get(index) === column) continue;
+        const startColumn = column;
+        const startRow = index * 50;
+        const endRow = Math.min(metadata.rows - 1, startRow + 49);
+        const endColumn = Math.min(metadata.columns - 1, startColumn + 19);
+        const anchors = metadata.merges.filter(merge => merge.s.r <= endRow && merge.e.r >= startRow && merge.s.c <= endColumn && merge.e.c >= startColumn).map(merge => ({ row: merge.s.r, column: merge.s.c }));
+        const cells = await request('window', { index: selected, range: { startRow, endRow, startColumn, endColumn, anchors } });
+        if (version !== revision || signal.aborted) return;
+        if (startColumn !== column) { repeat = true; return; }
+        if (!visible.has(index)) continue;
+        pages[index].querySelector('table')?.remove();
+        pages[index].append(tableFor(index, cells));
+        pages[index].setAttribute('aria-busy', 'false');
+        mounted.set(index, column);
+      }
+      status.textContent = '';
+    } catch (error) { if (!signal.aborted && error.name !== 'AbortError') status.textContent = labels.error; }
+    finally { drawing = false; if (repeat) { repeat = false; void draw(); } }
+  }
+  async function select(index) {
+    const version = ++revision;
+    selected = index;
+    metadata = null;
+    observer?.disconnect();
+    mounted.clear();
+    visible.clear();
+    column = 0;
+    active = { row: 0, column: 0 };
+    address.value = 'A1';
+    value.textContent = '';
+    doc.body.replaceChildren();
+    status.textContent = labels.loading;
+    buttons.forEach((button, position) => { button.setAttribute('aria-selected', String(position === index)); button.tabIndex = position === index ? 0 : -1; });
+    viewport.setAttribute('aria-labelledby', buttons[index].id);
+    try {
+      const info = await request('sheet', { index });
+      if (version !== revision || signal.aborted) return;
+      metadata = info;
+      dimensions.textContent = info.rows.toLocaleString() + ' × ' + info.columns.toLocaleString();
+      const count = Math.ceil(info.rows / 50);
+      pages = Array.from({ length: count }, (_, current) => {
+        const page = documentPage(doc, labels, current, count);
+        page.classList.add('sheet-page');
+        page.setAttribute('aria-busy', 'true');
+        page.style.width = (48 + info.columns * 120) + 'px';
+        page.style.maxWidth = 'none';
+        page.style.boxSizing = 'border-box';
+        if (current === count - 1) page.style.height = (Math.min(50, info.rows - current * 50) * 28 + 70) + 'px';
+        doc.body.append(page);
+        return page;
+      });
+      frame.contentWindow.scrollTo(0, 0);
+      visible.add(0);
+      await draw();
+      if (version !== revision || signal.aborted) return;
+      observer = new IntersectionObserver(entries => {
+        for (const entry of entries) {
+          const current = Number(entry.target.dataset.documentPage) - 1;
+          if (entry.isIntersecting) visible.add(current); else visible.delete(current);
+        }
+        void draw();
+      }, { root: doc, rootMargin: '200px 0px' });
+      for (const page of pages) observer.observe(page);
+    } catch (error) { if (!signal.aborted && version === revision && error.name !== 'AbortError') { status.textContent = labels.error; throw error; } }
+  }
+  async function go(target, focus = false) {
+    if (!metadata || target.row >= metadata.rows || target.column >= metadata.columns) { address.setAttribute('aria-invalid', 'true'); status.textContent = labels.invalidAddress; return; }
+    address.removeAttribute('aria-invalid');
+    active = target;
+    address.value = columnName(target.column) + (target.row + 1);
+    column = Math.max(0, Math.min(metadata.columns - 1, Math.floor(target.column / 20) * 20));
+    const index = Math.floor(target.row / 50);
+    visible.clear();
+    visible.add(index);
+    const zoom = parseFloat(frame.contentWindow.getComputedStyle(doc.body).zoom) || 1;
+    frame.contentWindow.scrollTo(column * 120 * zoom, pages[index].getBoundingClientRect().top + frame.contentWindow.scrollY);
+    await draw();
+    const cell = pages[index]?.querySelector('[data-row="' + target.row + '"][data-column="' + target.column + '"]');
+    if (cell) { chooseCell(cell); cell.scrollIntoView({ block: 'nearest', inline: 'nearest' }); if (focus) cell.focus({ preventScroll: true }); }
+  }
+  formulaBar.addEventListener('submit', event => {
+    event.preventDefault();
+    try { void go(cellAddress(address.value)); }
+    catch { address.setAttribute('aria-invalid', 'true'); status.textContent = labels.invalidAddress; }
   });
+  address.addEventListener('input', () => address.removeAttribute('aria-invalid'));
+  doc.addEventListener('keydown', event => {
+    if (!event.target.matches('[data-row]')) return;
+    const moves = { ArrowDown: [1, 0], ArrowUp: [-1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
+    const move = moves[event.key];
+    if (!move) return;
+    event.preventDefault();
+    void go({ row: Math.max(0, active.row + move[0]), column: Math.max(0, active.column + move[1]) }, true);
+  }, { signal });
+  frame.contentWindow.addEventListener('scroll', () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const zoom = parseFloat(frame.contentWindow.getComputedStyle(doc.body).zoom) || 1;
+      const next = Math.max(0, Math.floor((frame.contentWindow.scrollX / zoom - 48) / 120));
+      if (metadata && next !== column) { column = Math.min(metadata.columns - 1, next); void draw(); }
+    }, 80);
+  }, { signal, passive: true });
   buttons.forEach((button, index) => {
-    button.addEventListener('click', () => { selected = index; draw(); });
+    button.addEventListener('click', () => { void select(index).catch(() => {}); });
     button.addEventListener('keydown', event => {
       const direction = getComputedStyle(tabs).direction === 'rtl' ? -1 : 1;
       const next = { ArrowRight: (index + direction + buttons.length) % buttons.length, ArrowLeft: (index - direction + buttons.length) % buttons.length, Home: 0, End: buttons.length - 1 }[event.key];
       if (next === undefined) return;
       event.preventDefault();
-      selected = next;
-      draw();
-      buttons[selected].focus();
+      void select(next).catch(() => {});
+      buttons[next].focus();
     });
   });
-  draw();
+  await select(0);
+  return () => { cleanup(); footer.remove(); };
 }
