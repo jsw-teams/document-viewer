@@ -108,6 +108,8 @@ test('worksheet windows reach remote cells, release old DOM, preserve merges and
     const frame = page.frameLocator('iframe');
     await frame.getByText('Window origin', { exact: true }).waitFor();
     assert.equal(await frame.getByText('Window origin', { exact: true }).getAttribute('colspan'), '2');
+    assert.equal(await frame.getByRole('grid').getAttribute('aria-colcount'), '129');
+    assert.equal(await frame.getByRole('grid').getAttribute('aria-readonly'), 'true');
     assert.equal(await page.locator('.document-viewer-mode').textContent(), '只读预览');
     const address = page.getByRole('textbox', { name: '单元格地址' });
     await address.fill('DX5001');

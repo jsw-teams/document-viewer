@@ -104,6 +104,10 @@ export async function render({ data, format, frame, viewport, controls, signal, 
   function tableFor(index, cells) {
     const table = doc.createElement('table');
     table.className = 'sheet-grid';
+    table.setAttribute('role', 'grid');
+    table.setAttribute('aria-readonly', 'true');
+    table.setAttribute('aria-rowcount', String(metadata.rows + 1));
+    table.setAttribute('aria-colcount', String(metadata.columns + 1));
     table.style.width = (48 + metadata.columns * 120) + 'px';
     const caption = doc.createElement('caption');
     caption.textContent = names[selected];
@@ -142,6 +146,7 @@ export async function render({ data, format, frame, viewport, controls, signal, 
     const body = doc.createElement('tbody');
     for (let row = start; row <= end; row++) {
       const line = doc.createElement('tr');
+      line.setAttribute('aria-rowindex', String(row + 2));
       const heading = doc.createElement('th');
       heading.scope = 'row';
       heading.textContent = String(row + 1);
@@ -155,6 +160,7 @@ export async function render({ data, format, frame, viewport, controls, signal, 
         const node = doc.createElement('td');
         node.dataset.row = String(row);
         node.dataset.column = String(current);
+        node.setAttribute('aria-colindex', String(current + 2));
         const cell = values.get((merge?.s.r ?? row) + ':' + (merge?.s.c ?? current));
         node.textContent = cell?.text || '';
         node.dataset.formula = cell?.formula || '';
