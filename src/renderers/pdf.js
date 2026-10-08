@@ -55,7 +55,7 @@ export async function render({ data, frame, signal, labels, status, setCleanup }
     const page = await pdf.getPage(entry.index + 1);
     signal.throwIfAborted();
     const viewport = page.getViewport({ scale: Math.min(2, available / page.getViewport({ scale: 1 }).width) });
-    const ratio = Math.min(2, devicePixelRatio || 1);
+    const ratio = Math.min(2, Math.max(devicePixelRatio || 1, 600 / viewport.width));
     const pixels = viewport.width * viewport.height * ratio * ratio;
     if (pixels > 12000000) throw new Error('PDF page exceeds rendering limits');
     const wrapper = entry.wrapper;

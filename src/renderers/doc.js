@@ -9,7 +9,6 @@ export async function render({ data, frame, signal, labels }) {
   styles.textContent = result.css;
   frame.contentDocument.head.append(styles);
   const wrapper = frame.contentDocument.createElement('div');
-  wrapper.className = 'msdoc-root';
   wrapper.append(inertDocumentHtml(frame.contentDocument, result.html));
   const breaks = [...wrapper.querySelectorAll('.msdoc-page-break')];
   const pages = [];

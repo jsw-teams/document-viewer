@@ -288,6 +288,7 @@ test('browser renderers load only on preview, render real PDF/Office bytes, and 
       await page.evaluate(() => window.mount({ src: '/report.pdf' }));
       await page.getByRole('button', { name: '预览文档', exact: true }).click();
       await page.frameLocator('iframe').getByText('Document preview page one', { exact: true }).waitFor({ timeout: 20000 });
+      assert.ok(await page.frameLocator('iframe').locator('.pdf-page img').first().evaluate(image => image.naturalWidth >= Math.min(600, image.width * 2) - 1), 'Narrow PDF pages need sufficient raster density for visible text');
       assert.ok(await page.frameLocator('iframe').locator('.pdf-page img').first().evaluate(image => {
         const canvas = document.createElement('canvas');
         canvas.width = image.naturalWidth;
