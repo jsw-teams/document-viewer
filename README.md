@@ -6,7 +6,7 @@ Browser-only inline document previews for static sites and shared document URLs.
 
 | Format | Rendering |
 | --- | --- |
-| PDF | PDF.js, page navigation and selectable text |
+| PDF | PDF.js, continuous separated pages and selectable text |
 | DOCX | docx-preview, embedded pictures and pagination |
 | DOC | MS-DOC browser parser |
 | PPTX | Browser-native slide renderer |
@@ -19,7 +19,13 @@ Legacy PPT uses this project's own parser, disposable Worker and renderer. The o
 
 ### Legacy PPT boundaries
 
-This implementation follows the current persist-directory/edit chain and active slide order, excluding obsolete edits, notes and unused masters. It reads Unicode/compressed text, outline-text references, slide dimensions, basic shape positions, rectangles, ellipses, triangles, lines, explicit solid colors, rotation and embedded PNG/JPEG references. Parsing runs in a disposable Worker with bounded record/depth/slide counts. Slides have page navigation and selectable text.
+This implementation follows the current persist-directory/edit chain and active slide order, excluding obsolete edits, notes and unused masters. It reads Unicode/compressed text, outline-text references, slide dimensions, basic shape positions, rectangles, ellipses, triangles, lines, explicit solid colors, rotation and embedded PNG/JPEG references. Parsing runs in a disposable Worker with bounded record/depth/slide counts. Slides have continuous separated pages and selectable text. Both 16-bit and 32-bit MS-PPT client rectangles use top/left/right/bottom; MS-ODRAW child anchors use left/top/right/bottom. Local textbox text is retained alongside outline text. Text that cannot fit a positioned box remains readable below the slide instead of being clipped away.
+
+Specifications: [MS-PPT RectStruct](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-ppt/8a58e3ae-2682-42d0-82cd-a41c2999584e), [SmallRectStruct](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-ppt/e47cb973-8480-4995-90b2-008bcb2ffc65) and [OfficeArtClientTextbox](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-ppt/f50070dd-a4dc-4edd-a446-c4fcc5c80ace).
+
+## Continuous pages
+
+Documents scroll through separated, numbered pages rather than previous/next controls. Word uses authored page breaks, presentations use slide boundaries, and spreadsheets split the selected worksheet into 50-row pages while retaining worksheet tabs. PDF pages render near the scroll viewport and release distant rasters when the cache exceeds eight pages or 32 million pixels. The sandbox stays script-disabled; renderers and observers run in the parent page. Legacy Word HTML is parsed into an inert template and stripped of executable elements and event attributes before insertion.
 
 It is **not** a complete replacement for a mature Office renderer: animations, charts, master/style inheritance, grouped-coordinate transforms, complete text-run formatting, gradients, arbitrary paths, OLE, EMF/WMF and encrypted PPT are unsupported. These technical boundaries are documented here rather than displayed as a warning in the viewer. Extracted text without a supported positioned shape remains readable below the slide.
 

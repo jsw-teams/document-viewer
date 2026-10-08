@@ -13,7 +13,7 @@ async function fixtureServer(provided = new Map()) {
   const fixtures = new Map([
     ['/report.pdf', pdfFixture()], ['/report.docx', await wordFixture()],
     ['/report.xlsx', sheetFixture()], ['/report.xls', sheetFixture('xls')],
-    ['/report.pptx', await slidesFixture()], ['/report.ppt', legacyPpt()],
+    ['/report.pptx', await slidesFixture()], ['/report.ppt', legacyPpt()], ['/thin.ppt', legacyPpt({ thinAnchor: true })],
     ['/download/123', sheetFixture()], ['/invalid.pdf', Buffer.from('Not a PDF')]
   ]);
   for (const [path, bytes] of provided) fixtures.set(path, bytes);
@@ -36,6 +36,11 @@ async function fixtureServer(provided = new Map()) {
     if (path === '/axe.js') {
       response.setHeader('Content-Type', 'text/javascript');
       response.end(await readFile(new URL('../node_modules/axe-core/axe.min.js', import.meta.url)));
+      return;
+    }
+    if (path === '/safe-html.js') {
+      response.setHeader('Content-Type', 'text/javascript');
+      response.end(await readFile(new URL('../src/safe-html.js', import.meta.url)));
       return;
     }
     if (fixtures.has(path)) { response.end(fixtures.get(path)); return; }
@@ -73,6 +78,29 @@ test('automatic preview respects consent, avoids focus theft and exposes no down
   } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 });
 
+test('document HTML loses executable content before entering the script-disabled frame', async () => {
+  const { server, url } = await fixtureServer();
+  const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
+  try {
+    const page = await browser.newPage();
+    const errors = [];
+    page.on('console', message => { if (/Blocked script execution/.test(message.text())) errors.push(message.text()); });
+    await page.goto(url);
+    await page.waitForFunction(() => window.ready);
+    await page.evaluate(() => window.mount({ src: '/report.xlsx', autoOpen: true }));
+    await page.frameLocator('iframe').getByText('First sheet', { exact: true }).waitFor();
+    const result = await page.evaluate(async () => {
+      const { inertDocumentHtml } = await import('/safe-html.js');
+      const doc = document.querySelector('iframe').contentDocument;
+      doc.body.replaceChildren(inertDocumentHtml(doc, '<script>parent.injected=true</script><svg onload="parent.injected=true"></svg><a href="javascript:parent.injected=true">Readable text</a><iframe srcdoc="<script>parent.injected=true</script>"></iframe>'));
+      return { text: doc.body.textContent, scripts: doc.querySelectorAll('script,iframe,[onload],[href]').length, injected: window.injected || false };
+    });
+    assert.deepEqual(result, { text: 'Readable text', scripts: 0, injected: false });
+    assert.deepEqual(errors, []);
+    assert.equal(await page.locator('iframe').getAttribute('sandbox'), 'allow-same-origin');
+  } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
+});
+
 test('legacy PPT Worker renders independently without a vendor engine', { timeout: 20000 }, async () => {
   const { server, url } = await fixtureServer();
   const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
@@ -87,6 +115,12 @@ test('legacy PPT Worker renders independently without a vendor engine', { timeou
     await page.frameLocator('iframe').getByText('First slide: 中文', { exact: true }).waitFor();
     await page.locator('.document-viewer-viewport[aria-busy="false"]').waitFor();
     assert.equal(await page.locator('.document-viewer-status').textContent(), '');
+    await page.evaluate(() => window.mount({ src: '/thin.ppt', autoOpen: true }));
+    const transcript = page.frameLocator('iframe').locator('.document-page-text').getByText('First slide: 中文', { exact: true });
+    await transcript.waitFor();
+    assert.ok(await transcript.evaluate(node => node.getBoundingClientRect().height >= 16));
+    assert.equal(await page.frameLocator('iframe').locator('[data-document-page]').count(), 2);
+    assert.equal(await page.getByRole('button', { name: '下一页', exact: true }).count(), 0);
   } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
 });
 
@@ -241,7 +275,7 @@ test('browser renderers load only on preview, render real PDF/Office bytes, and 
           assert.ok(await page.frameLocator('iframe').locator('section.docx').evaluate(node => node.getBoundingClientRect().width >= innerWidth * 0.8), 'Word page must use the available viewport width');
         }
         if (source.endsWith('.ppt')) {
-          await page.getByRole('button', { name: '下一页', exact: true }).click();
+          await page.frameLocator('iframe').locator('[data-document-page="2"]').scrollIntoViewIfNeeded();
           await page.frameLocator('iframe').getByText('Second slide', { exact: true }).waitFor();
         }
         await page.getByRole('button', { name: '关闭预览', exact: true }).click();
@@ -250,7 +284,7 @@ test('browser renderers load only on preview, render real PDF/Office bytes, and 
       await page.evaluate(() => window.mount({ src: '/report.pdf' }));
       await page.getByRole('button', { name: '预览文档', exact: true }).click();
       await page.frameLocator('iframe').getByText('Document preview page one', { exact: true }).waitFor({ timeout: 20000 });
-      assert.ok(await page.frameLocator('iframe').locator('.pdf-page img').evaluate(image => {
+      assert.ok(await page.frameLocator('iframe').locator('.pdf-page img').first().evaluate(image => {
         const canvas = document.createElement('canvas');
         canvas.width = image.naturalWidth;
         canvas.height = image.naturalHeight;
@@ -260,7 +294,8 @@ test('browser renderers load only on preview, render real PDF/Office bytes, and 
         for (let offset = 0; offset < pixels.length; offset += 4) if (pixels[offset] < 128 && pixels[offset + 3]) ink++;
         return ink > 100;
       }), 'PDF preview must paint visible content, not only an invisible text layer');
-      await page.getByRole('button', { name: '下一页', exact: true }).click();
+      assert.equal(await page.getByRole('button', { name: '下一页', exact: true }).count(), 0);
+      await page.frameLocator('iframe').locator('[data-document-page="2"]').scrollIntoViewIfNeeded();
       await page.frameLocator('iframe').getByText('Document preview page two', { exact: true }).waitFor();
       await page.getByRole('button', { name: '关闭预览', exact: true }).click();
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);

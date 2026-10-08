@@ -1,4 +1,5 @@
 import { read, utils } from 'xlsx';
+import { documentPage } from '../pages.js';
 
 export async function render({ data, frame, viewport, controls, signal, labels, status, guard }) {
   const workbook = read(data, { type: 'array', sheetRows: 1001, cellHTML: false, cellStyles: false, bookVBA: false });
@@ -28,37 +29,44 @@ export async function render({ data, frame, viewport, controls, signal, labels, 
     const truncated = !!sheet['!fullref'] || range.e.r - range.s.r >= 1000 || range.e.c - range.s.c >= 100;
     range.e.r = Math.min(range.e.r, range.s.r + 999);
     range.e.c = Math.min(range.e.c, range.s.c + 99);
-    const table = frame.contentDocument.createElement('table');
-    const caption = frame.contentDocument.createElement('caption');
-    caption.textContent = workbook.SheetNames[selected];
-    const head = frame.contentDocument.createElement('thead');
-    const headings = frame.contentDocument.createElement('tr');
-    const corner = frame.contentDocument.createElement('td');
-    headings.append(corner);
-    for (let column = range.s.c; column <= range.e.c; column++) {
-      const heading = frame.contentDocument.createElement('th');
-      heading.scope = 'col';
-      heading.textContent = utils.encode_col(column);
-      headings.append(heading);
-    }
-    head.append(headings);
-    const body = frame.contentDocument.createElement('tbody');
-    for (let row = range.s.r; row <= range.e.r; row++) {
-      const line = frame.contentDocument.createElement('tr');
-      const heading = frame.contentDocument.createElement('th');
-      heading.scope = 'row';
-      heading.textContent = String(row + 1);
-      line.append(heading);
+    frame.contentDocument.body.replaceChildren();
+    const pageCount = Math.ceil((range.e.r - range.s.r + 1) / 50);
+    for (let start = range.s.r; start <= range.e.r; start += 50) {
+      const page = documentPage(frame.contentDocument, labels, (start - range.s.r) / 50, pageCount);
+      const table = frame.contentDocument.createElement('table');
+      const caption = frame.contentDocument.createElement('caption');
+      caption.textContent = workbook.SheetNames[selected];
+      const head = frame.contentDocument.createElement('thead');
+      const headings = frame.contentDocument.createElement('tr');
+      const corner = frame.contentDocument.createElement('td');
+      headings.append(corner);
       for (let column = range.s.c; column <= range.e.c; column++) {
-        const cell = frame.contentDocument.createElement('td');
-        const value = sheet[utils.encode_cell({ r: row, c: column })];
-        cell.textContent = value ? utils.format_cell(value) : '';
-        line.append(cell);
+        const heading = frame.contentDocument.createElement('th');
+        heading.scope = 'col';
+        heading.textContent = utils.encode_col(column);
+        headings.append(heading);
       }
-      body.append(line);
+      head.append(headings);
+      const body = frame.contentDocument.createElement('tbody');
+      for (let row = start; row <= Math.min(range.e.r, start + 49); row++) {
+        const line = frame.contentDocument.createElement('tr');
+        const heading = frame.contentDocument.createElement('th');
+        heading.scope = 'row';
+        heading.textContent = String(row + 1);
+        line.append(heading);
+        for (let column = range.s.c; column <= range.e.c; column++) {
+          const cell = frame.contentDocument.createElement('td');
+          const value = sheet[utils.encode_cell({ r: row, c: column })];
+          cell.textContent = value ? utils.format_cell(value) : '';
+          line.append(cell);
+        }
+        body.append(line);
+      }
+      table.append(caption, head, body);
+      page.append(table);
+      frame.contentDocument.body.append(page);
     }
-    table.append(caption, head, body);
-    frame.contentDocument.body.replaceChildren(table);
+    frame.contentWindow.scrollTo(0, 0);
     buttons.forEach((button, index) => {
       button.setAttribute('aria-selected', String(index === selected));
       button.tabIndex = index === selected ? 0 : -1;

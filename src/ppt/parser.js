@@ -181,10 +181,12 @@ function shapes(stream, slide, texts, state, scheme) {
     const values = options(stream, shape, state);
     const small = anchor.size === 8;
     const coordinates = Array.from({ length: 4 }, (_, index) => small ? stream.view.getInt16(anchor.start + index * 2, true) : stream.view.getInt32(anchor.start + index * 4, true));
-    const [top, left, right, bottom] = small ? coordinates : [coordinates[1], coordinates[0], coordinates[2], coordinates[3]];
+    const [top, left, right, bottom] = anchor.type === types.anchor ? coordinates : [coordinates[1], coordinates[0], coordinates[2], coordinates[3]];
     const inline = descendants(stream, shape, state, new Set([types.textHeader, types.textChars, types.textBytes, types.textReference]));
     const reference = inline.find(record => record.type === types.textReference && record.size >= 4);
-    const content = reference ? [texts[stream.view.getUint32(reference.start, true)]].filter(Boolean) : textBlocks(stream, inline);
+    const referenceIndex = reference ? stream.view.getInt32(reference.start, true) : null;
+    if (reference && (referenceIndex < 0 || referenceIndex >= texts.length)) throw new Error('Invalid PPT outline text reference');
+    const content = reference ? [texts[referenceIndex]] : textBlocks(stream, inline);
     const flags = stream.view.getUint32(properties.start + 4, true);
     result.push({ type: properties.instance, left, top, width: Math.max(0, right - left), height: Math.max(0, bottom - top),
       fill: color(values.get(385), scheme, 'transparent'), stroke: color(values.get(448), scheme, 'transparent'),
@@ -233,7 +235,7 @@ export function parsePpt(input) {
     const palette = descendants(stream, container, state, new Set([types.colorScheme])).find(record => record.size >= 32);
     const scheme = palette ? Array.from({ length: 8 }, (_, index) => stream.view.getUint32(palette.start + index * 4, true)) : [];
     slide.shapes = shapes(stream, container, slide.texts, state, scheme);
-    if (!slide.texts.length) slide.texts = textBlocks(stream, descendants(stream, container, state, new Set([types.textHeader, types.textChars, types.textBytes])));
+    slide.texts.push(...textBlocks(stream, descendants(stream, container, state, new Set([types.textHeader, types.textChars, types.textBytes]))));
     delete slide.records;
   }
   return { width, height, slides, pictures };

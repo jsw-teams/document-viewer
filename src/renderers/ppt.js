@@ -1,3 +1,5 @@
+import { documentPage } from '../pages.js';
+
 const namespace = 'http://www.w3.org/2000/svg';
 
 export async function render({ data, frame, controls, signal, labels, status, setCleanup, guard }) {
@@ -27,25 +29,19 @@ export async function render({ data, frame, controls, signal, labels, status, se
     imageUrls.set(picture, url);
     return url;
   });
-  let current = 0;
-  const previous = document.createElement('button');
-  const next = document.createElement('button');
-  const position = document.createElement('span');
-  previous.type = next.type = 'button';
-  previous.textContent = labels.previous;
-  next.textContent = labels.next;
-  position.setAttribute('aria-live', 'polite');
-  controls.append(previous, position, next);
   const create = (name, attributes = {}) => {
     const node = frame.contentDocument.createElementNS(namespace, name);
     for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, String(value));
     return node;
   };
-  const draw = guard(() => {
-    const slide = presentation.slides[current];
+  frame.contentDocument.body.replaceChildren();
+  for (const [current, slide] of presentation.slides.entries()) {
+    signal.throwIfAborted();
+    const page = documentPage(frame.contentDocument, labels, current, presentation.slides.length);
     const svg = create('svg', { viewBox: `0 0 ${presentation.width} ${presentation.height}`, width: '100%', role: 'img', 'aria-label': labels.page + ' ' + (current + 1) });
     svg.append(create('rect', { width: presentation.width, height: presentation.height, fill: '#fff' }));
     const represented = new Set();
+    const positioned = new Map();
     for (const shape of slide.shapes) {
       const group = create('g', { transform: `rotate(${shape.rotation} ${shape.left + shape.width / 2} ${shape.top + shape.height / 2})` });
       const common = { fill: shape.fill, stroke: shape.stroke, 'stroke-width': presentation.width / 700 };
@@ -60,18 +56,27 @@ export async function render({ data, frame, controls, signal, labels, status, se
       } else if ([1, 2, 202].includes(shape.type) || shape.background) {
         group.append(create('rect', { ...common, x: shape.left, y: shape.top, width: shape.width, height: shape.height, rx: shape.type === 2 ? Math.min(shape.width, shape.height) / 10 : 0 }));
       }
-      if (shape.texts.length) {
+      if (shape.texts.length && shape.width >= presentation.width / 30 && shape.height >= presentation.width / 30 && shape.left >= 0 && shape.top >= 0 && shape.left + shape.width <= presentation.width && shape.top + shape.height <= presentation.height) {
         const box = create('foreignObject', { x: shape.left, y: shape.top, width: shape.width, height: shape.height });
         const text = frame.contentDocument.createElementNS('http://www.w3.org/1999/xhtml', 'div');
         text.style.cssText = `font:${presentation.width / 30}px system-ui;white-space:pre-wrap;overflow-wrap:anywhere;color:#222;padding:8px;box-sizing:border-box`;
         text.textContent = shape.texts.map(item => item.text).join('\n');
         box.append(text);
         group.append(box);
-        for (const item of shape.texts) represented.add(item.text);
+        positioned.set(box, shape.texts);
       }
       svg.append(group);
     }
+    page.append(svg);
+    frame.contentDocument.body.append(page);
+    for (const box of svg.querySelectorAll('foreignObject')) {
+      const text = box.firstElementChild;
+      if (text.scrollHeight <= box.height.baseVal.value && text.scrollWidth <= box.width.baseVal.value) {
+        for (const item of positioned.get(box)) represented.add(item.text);
+      } else box.remove();
+    }
     const transcript = frame.contentDocument.createElement('section');
+    transcript.className = 'document-page-text';
     transcript.setAttribute('aria-label', labels.page + ' ' + (current + 1));
     for (const item of slide.texts) {
       if (!item.text || represented.has(item.text)) continue;
@@ -80,13 +85,7 @@ export async function render({ data, frame, controls, signal, labels, status, se
       paragraph.textContent = item.text;
       transcript.append(paragraph);
     }
-    frame.contentDocument.body.replaceChildren(svg, transcript);
-    position.textContent = labels.page + ' ' + (current + 1) + ' / ' + presentation.slides.length;
-    previous.disabled = current === 0;
-    next.disabled = current === presentation.slides.length - 1;
-  });
-  previous.addEventListener('click', () => { current = Math.max(0, current - 1); draw(); });
-  next.addEventListener('click', () => { current = Math.min(presentation.slides.length - 1, current + 1); draw(); });
-  draw();
+    page.append(transcript);
+  }
   return cleanup;
 }

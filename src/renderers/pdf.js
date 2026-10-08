@@ -1,103 +1,131 @@
 import { getDocument, GlobalWorkerOptions, TextLayer } from 'pdfjs-dist/build/pdf.mjs';
+import { documentPage } from '../pages.js';
 
 GlobalWorkerOptions.workerSrc = new URL('../pdf.worker.js', import.meta.url).href;
 const resources = typeof __DOCUMENT_PDF_ASSETS__ === 'string' ? __DOCUMENT_PDF_ASSETS__ : '../pdf-assets/';
 
-export async function render({ data, frame, controls, signal, labels, status, setCleanup, guard }) {
-  const task = getDocument({ data, ownerDocument: frame.contentDocument, isEvalSupported: false, stopAtErrors: true,
+export async function render({ data, frame, signal, labels, status, setCleanup }) {
+  const doc = frame.contentDocument;
+  const task = getDocument({ data, ownerDocument: doc, isEvalSupported: false, stopAtErrors: true,
     cMapUrl: new URL(resources + 'cmaps/', import.meta.url).href, cMapPacked: true,
     standardFontDataUrl: new URL(resources + 'standard_fonts/', import.meta.url).href,
     wasmUrl: new URL(resources + 'wasm/', import.meta.url).href });
   let renderTask = null;
   let textLayer = null;
+  let observer = null;
   let destroyed = false;
-  let imageUrl = null;
+  const cache = new Map();
+  const waiting = new Set();
+  const nearby = new Set();
+  let running = false;
   const cleanup = () => {
     if (destroyed) return;
     destroyed = true;
+    observer?.disconnect();
+    waiting.clear();
     renderTask?.cancel();
     textLayer?.cancel();
-    if (imageUrl) URL.revokeObjectURL(imageUrl);
-    imageUrl = null;
+    for (const entry of cache.values()) URL.revokeObjectURL(entry.url);
+    cache.clear();
     void task.destroy().catch(() => {});
   };
   setCleanup(cleanup);
   const pdf = await task.promise;
   signal.throwIfAborted();
-  let current = 1;
-  let busy = false;
-  const previous = document.createElement('button');
-  const next = document.createElement('button');
-  const position = document.createElement('span');
-  previous.type = next.type = 'button';
-  previous.textContent = labels.previous;
-  next.textContent = labels.next;
-  position.setAttribute('aria-live', 'polite');
-  controls.append(previous, position, next);
-  const style = frame.contentDocument.createElement('style');
-  style.textContent = '.pdf-page{position:relative;margin:auto}.textLayer{position:absolute;inset:0;overflow:clip;opacity:1;line-height:1;text-align:initial;forced-color-adjust:none;transform-origin:0 0;z-index:2}.textLayer :is(span,br){color:transparent;position:absolute;white-space:pre;cursor:text;transform-origin:0 0}.textLayer span.markedContent{top:0;height:0}.textLayer ::selection{background:Highlight;color:transparent}';
-  frame.contentDocument.head.append(style);
-  async function draw() {
-    busy = true;
-    previous.disabled = next.disabled = true;
-    try {
-      const page = await pdf.getPage(current);
-      signal.throwIfAborted();
-      const available = Math.max(220, frame.clientWidth - 28);
-      const viewport = page.getViewport({ scale: Math.min(2, available / page.getViewport({ scale: 1 }).width) });
-      const ratio = Math.min(2, devicePixelRatio || 1);
-      if (viewport.width * viewport.height * ratio * ratio > 12000000) throw new Error('PDF page exceeds rendering limits');
-      const wrapper = frame.contentDocument.createElement('div');
-      wrapper.className = 'pdf-page';
-      wrapper.style.width = viewport.width + 'px';
-      wrapper.style.height = viewport.height + 'px';
-      wrapper.style.setProperty('--scale-factor', viewport.scale);
-      wrapper.style.setProperty('--total-scale-factor', viewport.scale);
-      const canvas = frame.contentDocument.createElement('canvas');
-      canvas.width = Math.ceil(viewport.width * ratio);
-      canvas.height = Math.ceil(viewport.height * ratio);
-      canvas.style.width = viewport.width + 'px';
-      canvas.style.height = viewport.height + 'px';
-      wrapper.append(canvas);
-      frame.contentDocument.body.replaceChildren(wrapper);
-      renderTask = page.render({ canvasContext: canvas.getContext('2d'), viewport, transform: [ratio, 0, 0, ratio, 0, 0] });
-      await renderTask.promise;
-      signal.throwIfAborted();
-      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-      if (!blob) throw new Error('PDF page image could not be created');
-      signal.throwIfAborted();
-      if (imageUrl) URL.revokeObjectURL(imageUrl);
-      imageUrl = URL.createObjectURL(blob);
-      const painted = frame.contentDocument.createElement('img');
-      painted.alt = '';
-      painted.style.cssText = canvas.style.cssText + ';display:block';
-      const loaded = new Promise((resolve, reject) => {
-        painted.onload = resolve;
-        painted.onerror = () => reject(new Error('PDF page image could not be displayed'));
-      });
-      painted.src = imageUrl;
-      canvas.replaceWith(painted);
-      await loaded;
-      signal.throwIfAborted();
-      const text = frame.contentDocument.createElement('div');
-      text.className = 'textLayer';
-      wrapper.append(text);
-      textLayer = new TextLayer({ textContentSource: await page.getTextContent(), container: text, viewport });
-      await textLayer.render();
-      signal.throwIfAborted();
-      position.textContent = labels.page + ' ' + current + ' / ' + pdf.numPages;
-    } finally {
-      busy = false;
-      if (!signal.aborted) { previous.disabled = current === 1; next.disabled = current === pdf.numPages; }
+  if (pdf.numPages > 1000) throw new Error('PDF page count exceeds limit');
+  const style = doc.createElement('style');
+  style.textContent = '.pdf-page{position:relative;margin:auto;max-width:100%}.textLayer{position:absolute;inset:0;overflow:clip;opacity:1;line-height:1;text-align:initial;forced-color-adjust:none;transform-origin:0 0;z-index:2}.textLayer :is(span,br){color:transparent;position:absolute;white-space:pre;cursor:text;transform-origin:0 0}.textLayer span.markedContent{top:0;height:0}.textLayer ::selection{background:Highlight;color:transparent}';
+  doc.head.append(style);
+  const first = await pdf.getPage(1);
+  signal.throwIfAborted();
+  const available = Math.max(1, frame.clientWidth - 24);
+  const defaultViewport = first.getViewport({ scale: Math.min(2, available / first.getViewport({ scale: 1 }).width) });
+  const pages = Array.from({ length: pdf.numPages }, (_, index) => {
+    const section = documentPage(doc, labels, index, pdf.numPages);
+    const wrapper = doc.createElement('div');
+    wrapper.className = 'pdf-page';
+    wrapper.style.width = defaultViewport.width + 'px';
+    wrapper.style.height = defaultViewport.height + 'px';
+    wrapper.setAttribute('aria-busy', 'true');
+    section.append(wrapper);
+    doc.body.append(section);
+    return { section, wrapper, index };
+  });
+  async function draw(entry) {
+    const page = await pdf.getPage(entry.index + 1);
+    signal.throwIfAborted();
+    const viewport = page.getViewport({ scale: Math.min(2, available / page.getViewport({ scale: 1 }).width) });
+    const ratio = Math.min(2, devicePixelRatio || 1);
+    const pixels = viewport.width * viewport.height * ratio * ratio;
+    if (pixels > 12000000) throw new Error('PDF page exceeds rendering limits');
+    const wrapper = entry.wrapper;
+    wrapper.style.width = viewport.width + 'px';
+    wrapper.style.height = viewport.height + 'px';
+    wrapper.style.setProperty('--scale-factor', viewport.scale);
+    wrapper.style.setProperty('--total-scale-factor', viewport.scale);
+    const canvas = doc.createElement('canvas');
+    canvas.width = Math.ceil(viewport.width * ratio);
+    canvas.height = Math.ceil(viewport.height * ratio);
+    renderTask = page.render({ canvasContext: canvas.getContext('2d'), viewport, transform: [ratio, 0, 0, ratio, 0, 0] });
+    await renderTask.promise;
+    signal.throwIfAborted();
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('PDF page image could not be created');
+    signal.throwIfAborted();
+    const url = URL.createObjectURL(blob);
+    cache.set(entry.index, { url, pixels });
+    const painted = doc.createElement('img');
+    painted.alt = '';
+    painted.style.cssText = 'display:block;width:100%;height:100%';
+    const loaded = new Promise((resolve, reject) => {
+      painted.onload = resolve;
+      painted.onerror = () => reject(new Error('PDF page image could not be displayed'));
+    });
+    painted.src = url;
+    wrapper.replaceChildren(painted);
+    await loaded;
+    signal.throwIfAborted();
+    const text = doc.createElement('div');
+    text.className = 'textLayer';
+    wrapper.append(text);
+    textLayer = new TextLayer({ textContentSource: await page.getTextContent(), container: text, viewport });
+    await textLayer.render();
+    signal.throwIfAborted();
+    wrapper.setAttribute('aria-busy', 'false');
+    page.cleanup();
+    let total = [...cache.values()].reduce((sum, item) => sum + item.pixels, 0);
+    for (const [index, cached] of cache) {
+      if (cache.size <= 8 && total <= 32000000) break;
+      if (nearby.has(index) || index === entry.index) continue;
+      URL.revokeObjectURL(cached.url);
+      cache.delete(index);
+      pages[index].wrapper.replaceChildren();
+      pages[index].wrapper.setAttribute('aria-busy', 'true');
+      total -= cached.pixels;
     }
   }
-  const move = direction => guard(async () => {
-    if (busy) return;
-    current = Math.max(1, Math.min(pdf.numPages, current + direction));
-    try { await draw(); } catch { if (!signal.aborted) status.textContent = labels.error; }
-  });
-  previous.addEventListener('click', move(-1));
-  next.addEventListener('click', move(1));
-  await draw();
+  await draw(pages[0]);
+  async function drain() {
+    if (running || destroyed) return;
+    running = true;
+    try {
+      while (waiting.size && !destroyed) {
+        const index = waiting.values().next().value;
+        waiting.delete(index);
+        if (nearby.has(index) && !cache.has(index)) await draw(pages[index]);
+      }
+    } catch {
+      if (!signal.aborted && !destroyed) status.textContent = labels.error;
+    } finally { running = false; }
+  }
+  observer = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      const index = Number(entry.target.dataset.documentPage) - 1;
+      if (entry.isIntersecting) { nearby.add(index); waiting.add(index); }
+      else { nearby.delete(index); waiting.delete(index); }
+    }
+    void drain();
+  }, { root: doc, rootMargin: '600px 0px' });
+  for (const page of pages) observer.observe(page.section);
   return cleanup;
 }

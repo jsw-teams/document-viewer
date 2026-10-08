@@ -15,6 +15,9 @@ export async function documentFrame(container, title, signal) {
   await loaded;
   signal.throwIfAborted();
   frame.contentDocument.documentElement.lang = document.documentElement.lang || 'en';
+  const pages = frame.contentDocument.createElement('style');
+  pages.textContent = '.document-page{display:block;margin:0 auto 24px;break-after:page;border-bottom:1px solid var(--document-viewer-line);padding-bottom:20px;max-width:100%;overflow-wrap:anywhere}.document-page-label{font:inherit;font-size:.875em;color:var(--document-viewer-muted);margin:0 0 12px}.document-page-text{background:#fff;color:#222;padding:16px}.document-page svg{display:block;background:#fff}.document-page .msdoc-root{padding:16px;box-sizing:border-box}.docx-wrapper>.document-page{width:100%;padding:0 0 20px}.document-page>section.docx{max-width:100%;box-sizing:border-box;width:100%!important;margin:0 auto!important}.document-page table{display:block;overflow-x:auto}';
+  frame.contentDocument.head.append(pages);
   const synchronize = () => {
     const theme = getComputedStyle(container);
     const target = frame.contentDocument.documentElement.style;

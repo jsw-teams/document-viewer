@@ -23,6 +23,18 @@ test('legacy PPT rejects invalid references, edit cycles, encrypted files and tr
   assert.throws(() => parsePpt(new Uint8Array(512)));
 });
 
+test('MS-PPT client rectangles differ from MS-ODRAW child anchors and local text is not lost', () => {
+  for (const option of [{}, { largeAnchor: true }, { childAnchor: true }]) {
+    const shape = parsePpt(legacyPpt(option)).slides[0].shapes[0];
+    assert.deepEqual([shape.left, shape.top, shape.width, shape.height], [256, 128, 3744, 672]);
+  }
+  for (const missingAnchor of [false, true]) {
+    const slide = parsePpt(legacyPpt({ inlineText: true, missingAnchor })).slides[0];
+    assert.deepEqual(slide.texts.map(item => item.text), ['First slide: 中文', 'Local textbox 中文']);
+  }
+  for (const outlineIndex of [-1, 99]) assert.throws(() => parsePpt(legacyPpt({ outlineIndex })), /outline text reference/);
+});
+
 test('direct URLs support query strings and extensionless shares but reject unsafe sources', () => {
   assert.equal(documentFormat('/report.XLSX?download=1'), 'xlsx');
   assert.equal(documentFormat('/download/123', 'pdf'), 'pdf');

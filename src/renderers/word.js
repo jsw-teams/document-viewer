@@ -1,6 +1,7 @@
 import { renderAsync } from 'docx-preview';
+import { labelPages } from '../pages.js';
 
-export async function render({ data, frame, signal }) {
+export async function render({ data, frame, signal, labels }) {
   const styles = frame.contentDocument.createElement('div');
   const layout = frame.contentDocument.createElement('style');
   layout.textContent = '.docx-wrapper{align-items:stretch!important}.docx-wrapper>section{width:100%!important}';
@@ -12,4 +13,5 @@ export async function render({ data, frame, signal }) {
   frame.contentDocument.head.append(layout);
   signal.throwIfAborted();
   for (const anchor of frame.contentDocument.querySelectorAll('a')) anchor.removeAttribute('href');
+  labelPages([...frame.contentDocument.querySelectorAll('section.docx')], labels);
 }
