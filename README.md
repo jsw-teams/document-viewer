@@ -80,7 +80,7 @@ Controls are locally styled, not native browser selectors. The component automat
 
 Worksheet tabs support Left/Right, Home/End and roving keyboard focus, with selected state and a labeled panel. Tables expose row and column coordinates to assistive technology. Controls have 44 px minimum targets, visible focus and forced-colors support. Loading, errors and page positions are announced. Escape closes the preview even from inside the sandbox and restores focus to Preview. Integration tests check narrow layouts, light/dark palettes and WCAG contrast with axe; the host remains responsible for accessible theme colors.
 
-DOCX Symbol list bullets encoded as U+F0B7 are rendered with the Unicode U+2022 equivalent, so previews do not depend on an installed proprietary Symbol font. Unrelated fonts and private-use glyphs remain unchanged. The equivalence follows the [Unicode Consortium's Symbol encoding mapping](https://www.unicode.org/Public/MAPPINGS/VENDORS/ADOBE/symbol.txt).
+DOCX and legacy PPT Symbol list bullets encoded as U+F0B7 are rendered with the Unicode U+2022 equivalent, so previews do not depend on an installed proprietary Symbol font. PPT bullet percentages follow the authored paragraph text size. Unrelated fonts and private-use glyphs remain unchanged. The equivalence follows the [Unicode Consortium's Symbol encoding mapping](https://www.unicode.org/Public/MAPPINGS/VENDORS/ADOBE/symbol.txt).
 
 ## Shared URLs
 

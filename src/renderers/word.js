@@ -1,5 +1,6 @@
 import { parseAsync, renderDocument } from 'docx-preview';
 import { labelPages } from '../pages.js';
+import { symbolBullet } from '../symbols.js';
 
 export async function render({ data, frame, signal, labels, setCleanup }) {
   const styles = frame.contentDocument.createElement('div');
@@ -24,9 +25,10 @@ export async function render({ data, frame, signal, labels, setCleanup }) {
     const parsed = await parseAsync(data, options);
     signal.throwIfAborted();
     for (const numbering of parsed.numberingPart?.domNumberings || []) {
-      if (numbering.format !== 'bullet' || !/^["']?symbol["']?$/i.test(numbering.rStyle?.['font-family']?.trim() || '')) continue;
-      if (!numbering.levelText?.includes('\uf0b7')) continue;
-      numbering.levelText = numbering.levelText.replaceAll('\uf0b7', '\u2022');
+      if (numbering.format !== 'bullet') continue;
+      const text = symbolBullet(numbering.levelText, numbering.rStyle?.['font-family']);
+      if (text === numbering.levelText) continue;
+      numbering.levelText = text;
       numbering.rStyle['font-family'] = 'serif';
     }
     const nodes = await renderDocument(parsed, options);

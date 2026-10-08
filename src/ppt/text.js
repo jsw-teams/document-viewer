@@ -128,16 +128,21 @@ export function styledText(doc, item, { fonts = [], scheme = [], size = 24 } = {
     if (style.indent !== undefined) paragraph.style.textIndent = (style.indent - (style.margin || 0)) + 'px';
     if (style.lineSpacing) paragraph.style.lineHeight = style.lineSpacing > 0 ? String(style.lineSpacing / 100) : -style.lineSpacing + 'px';
     for (const [field, property] of [['before', 'marginTop'], ['after', 'marginBottom']]) if (style[field]) paragraph.style[property] = style[field] > 0 ? style[field] / 100 + 'em' : -style[field] + 'px';
+    const end = offset + line.length;
+    const runs = item.runs?.filter(entry => entry.start < end && entry.end > offset) || [];
+    paragraph.style.fontSize = (runs.length ? Math.max(...runs.map(run => run.size || size)) : size) * 8 + 'px';
     if (style.bullet) {
       const bullet = doc.createElement('span');
-      bullet.textContent = (style.bulletChar || '•') + '\u00a0';
+      const character = style.bulletChar || '•';
+      const font = fonts[style.bulletFont];
+      const mapped = symbolBullet(character, font);
+      bullet.textContent = mapped + '\u00a0';
       bullet.style.color = textColor(style.bulletColor, scheme);
-      if (fonts[style.bulletFont]) bullet.style.fontFamily = JSON.stringify(fonts[style.bulletFont]);
+      if (mapped !== character) bullet.style.fontFamily = 'serif';
+      else if (font) bullet.style.fontFamily = JSON.stringify(font);
       if (style.bulletSize) bullet.style.fontSize = style.bulletSize <= 400 ? style.bulletSize + '%' : style.bulletSize * 8 + 'px';
       paragraph.append(bullet);
     }
-    const end = offset + line.length;
-    const runs = item.runs?.filter(entry => entry.start < end && entry.end > offset) || [];
     if (!runs.length) paragraph.append(doc.createTextNode(line || '\u00a0'));
     else for (const run of runs) {
       const span = doc.createElement('span');
@@ -158,3 +163,4 @@ export function styledText(doc, item, { fonts = [], scheme = [], size = 24 } = {
   }
   return root;
 }
+import { symbolBullet } from '../symbols.js';
