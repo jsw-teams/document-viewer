@@ -10,6 +10,7 @@ export async function render({ data, format, frame, viewport, controls, signal, 
   let revision = 0;
   let timer = null;
   let metadata = null;
+  let columnOffsets = [];
   let pages = [];
   let column = 0;
   let active = { row: 0, column: 0 };
@@ -91,7 +92,7 @@ export async function render({ data, format, frame, viewport, controls, signal, 
     return button;
   });
   const stylesheet = doc.createElement('style');
-  stylesheet.textContent = '.sheet-page{height:1470px;overflow:hidden;position:relative}.sheet-page:last-child{height:auto;min-height:100px}.sheet-grid{border-collapse:collapse!important;table-layout:fixed;display:table!important;font-size:14px}.sheet-grid th,.sheet-grid td{height:28px;max-height:28px;padding:3px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:1px solid var(--document-viewer-line);line-height:20px}.sheet-grid td{cursor:cell}.sheet-grid td[aria-selected=true]{outline:2px solid var(--document-viewer-accent);outline-offset:-2px}.sheet-grid th{position:static}.sheet-grid .sheet-spacer{padding:0;border:0}.sheet-grid caption{text-align:start;height:32px}.sheet-grid col{width:120px}.sheet-grid col:first-child{width:48px}.sheet-page>h2{position:sticky;inset-inline-start:0;width:fit-content}.sheet-page table{overflow:visible}';
+  stylesheet.textContent = '.sheet-page{min-height:100px;overflow:visible;position:relative;padding:0;margin-inline:0}.sheet-grid{border-collapse:collapse;table-layout:fixed;font-size:14px;min-width:0;margin:0;background:#fff;color:#000}.sheet-grid th,.sheet-grid td{box-sizing:border-box;height:28px;padding:3px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:1px solid var(--document-viewer-line);line-height:20px;text-align:start}.sheet-grid td{cursor:cell}.sheet-grid td[aria-selected=true]{outline:2px solid var(--document-viewer-accent);outline-offset:-2px}.sheet-grid th{position:static;background:var(--document-viewer-surface);color:var(--document-viewer-ink)}.sheet-grid .sheet-spacer{padding:0;border:0}.sheet-grid caption{box-sizing:border-box;text-align:start;height:32px;padding:0;font-weight:700;color:var(--document-viewer-ink)}.sheet-page>h2{position:sticky;inset-inline-start:0;width:fit-content}';
   doc.head.append(stylesheet);
   function chooseCell(cell) {
     active = { row: Number(cell.dataset.row), column: Number(cell.dataset.column) };
@@ -108,7 +109,7 @@ export async function render({ data, format, frame, viewport, controls, signal, 
     table.setAttribute('aria-readonly', 'true');
     table.setAttribute('aria-rowcount', String(metadata.rows + 1));
     table.setAttribute('aria-colcount', String(metadata.columns + 1));
-    table.style.width = (48 + metadata.columns * 120) + 'px';
+    table.style.width = (48 + columnOffsets[metadata.columns]) + 'px';
     const caption = doc.createElement('caption');
     caption.textContent = names[selected];
     const start = index * 50;
@@ -130,16 +131,16 @@ export async function render({ data, format, frame, viewport, controls, signal, 
     const columns = doc.createElement('colgroup');
     columns.append(doc.createElement('col'));
     const addColumn = width => { const node = doc.createElement('col'); node.style.width = width + 'px'; columns.append(node); };
-    if (column) addColumn(column * 120);
-    spacer(headings, column * 120);
+    if (column) addColumn(columnOffsets[column]);
+    spacer(headings, columnOffsets[column]);
     for (let current = column; current <= endColumn; current++) {
-      addColumn(120);
+      addColumn(columnOffsets[current + 1] - columnOffsets[current]);
       const heading = doc.createElement('th');
       heading.scope = 'col';
       heading.textContent = columnName(current);
       headings.append(heading);
     }
-    const remaining = (metadata.columns - endColumn - 1) * 120;
+    const remaining = columnOffsets[metadata.columns] - columnOffsets[endColumn + 1];
     if (remaining) addColumn(remaining);
     spacer(headings, remaining);
     head.append(headings);
@@ -151,7 +152,7 @@ export async function render({ data, format, frame, viewport, controls, signal, 
       heading.scope = 'row';
       heading.textContent = String(row + 1);
       line.append(heading);
-      spacer(line, column * 120);
+      spacer(line, columnOffsets[column]);
       for (let current = column; current <= endColumn; current++) {
         const merge = merges.find(item => row >= item.s.r && row <= item.e.r && current >= item.s.c && current <= item.e.c);
         const firstRow = merge ? Math.max(start, merge.s.r) : row;
@@ -171,6 +172,10 @@ export async function render({ data, format, frame, viewport, controls, signal, 
         if (style.color) node.style.color = style.color;
         if (style.background) node.style.background = style.background;
         if (style.align) node.style.textAlign = style.align;
+        if (style.wrap) node.style.whiteSpace = 'pre-wrap';
+        if (style.vertical) node.style.verticalAlign = style.vertical;
+        if (style.font) node.style.fontFamily = style.font;
+        if (style.size > 0 && style.size <= 400) node.style.fontSize = style.size + 'pt';
         if (merge) { node.rowSpan = Math.min(end, merge.e.r) - firstRow + 1; node.colSpan = Math.min(endColumn, merge.e.c) - firstColumn + 1; }
         node.addEventListener('click', () => { chooseCell(node); node.focus({ preventScroll: true }); });
         if (row === active.row && current === active.column) chooseCell(node);
@@ -208,6 +213,8 @@ export async function render({ data, format, frame, viewport, controls, signal, 
         if (!visible.has(index)) continue;
         pages[index].querySelector('table')?.remove();
         pages[index].append(tableFor(index, cells));
+        const zoom = parseFloat(frame.contentWindow.getComputedStyle(doc.body).zoom) || 1;
+        pages[index].style.minHeight = Math.ceil(pages[index].getBoundingClientRect().height / zoom) + 'px';
         pages[index].setAttribute('aria-busy', 'false');
         mounted.set(index, column);
       }
@@ -234,16 +241,18 @@ export async function render({ data, format, frame, viewport, controls, signal, 
       const info = await request('sheet', { index });
       if (version !== revision || signal.aborted) return;
       metadata = info;
+      columnOffsets = [0];
+      for (let current = 0; current < info.columns; current++) columnOffsets.push(columnOffsets[current] + (info.columnWidths?.[current] ?? info.columnWidth ?? 64));
       dimensions.textContent = info.rows.toLocaleString() + ' × ' + info.columns.toLocaleString();
       const count = Math.ceil(info.rows / 50);
       pages = Array.from({ length: count }, (_, current) => {
         const page = documentPage(doc, labels, current, count);
         page.classList.add('sheet-page');
         page.setAttribute('aria-busy', 'true');
-        page.style.width = (48 + info.columns * 120) + 'px';
+        page.style.width = (48 + columnOffsets[info.columns]) + 'px';
         page.style.maxWidth = 'none';
         page.style.boxSizing = 'border-box';
-        if (current === count - 1) page.style.height = (Math.min(50, info.rows - current * 50) * 28 + 70) + 'px';
+        page.style.minHeight = (Math.min(50, info.rows - current * 50) * 28 + 100) + 'px';
         doc.body.append(page);
         return page;
       });
@@ -271,7 +280,7 @@ export async function render({ data, format, frame, viewport, controls, signal, 
     visible.clear();
     visible.add(index);
     const zoom = parseFloat(frame.contentWindow.getComputedStyle(doc.body).zoom) || 1;
-    frame.contentWindow.scrollTo(column * 120 * zoom, pages[index].getBoundingClientRect().top + frame.contentWindow.scrollY);
+    frame.contentWindow.scrollTo(columnOffsets[column] * zoom, pages[index].getBoundingClientRect().top + frame.contentWindow.scrollY);
     await draw();
     const cell = pages[index]?.querySelector('[data-row="' + target.row + '"][data-column="' + target.column + '"]');
     if (cell) { chooseCell(cell); cell.scrollIntoView({ block: 'nearest', inline: 'nearest' }); if (focus) cell.focus({ preventScroll: true }); }
@@ -294,7 +303,14 @@ export async function render({ data, format, frame, viewport, controls, signal, 
     clearTimeout(timer);
     timer = setTimeout(() => {
       const zoom = parseFloat(frame.contentWindow.getComputedStyle(doc.body).zoom) || 1;
-      const next = Math.max(0, Math.floor((frame.contentWindow.scrollX / zoom - 48) / 120));
+      const offset = Math.max(0, frame.contentWindow.scrollX / zoom - 48);
+      let begin = 0;
+      let end = columnOffsets.length - 1;
+      while (begin < end) {
+        const middle = Math.ceil((begin + end) / 2);
+        if (columnOffsets[middle] <= offset) begin = middle; else end = middle - 1;
+      }
+      const next = begin;
       if (metadata && next !== column) { column = Math.min(metadata.columns - 1, next); void draw(); }
     }, 80);
   }, { signal, passive: true });

@@ -125,7 +125,7 @@ export function mountDocument(container, options) {
       const disposeRenderer = cleanup;
       const disposePages = ['doc', 'docx', 'ppt'].includes(format) ? await windowDocumentPages(frame, signal) : null;
       if (active !== session) { disposePages?.(); return; }
-      const disposeChrome = previewChrome({ root, toolbar, frame, signal, labels });
+      const disposeChrome = previewChrome({ root, toolbar, frame, signal, labels, fitWidth: format === 'docx' });
       session.cleanup = () => { disposeChrome(); disposePages?.(); disposeRenderer?.(); };
       viewport.setAttribute('aria-busy', 'false');
       if (status.textContent === labels.loading) status.textContent = '';

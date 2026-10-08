@@ -1,4 +1,4 @@
-export function previewChrome({ root, toolbar, frame, signal, labels }) {
+export function previewChrome({ root, toolbar, frame, signal, labels, fitWidth = false }) {
   const tools = document.createElement('div');
   tools.className = 'document-viewer-view-tools';
   const percentage = document.createElement('output');
@@ -16,13 +16,22 @@ export function previewChrome({ root, toolbar, frame, signal, labels }) {
   const update = () => {
     frame.contentDocument.body.style.zoom = String(zoom);
     percentage.textContent = Math.round(zoom * 100) + '%';
-    smaller.disabled = zoom <= 0.5;
+    smaller.disabled = zoom <= 0.1;
     larger.disabled = zoom >= 2;
   };
-  const smaller = button(labels.zoomOut, '−', () => { zoom = Math.max(0.5, zoom - 0.25); update(); });
+  const smaller = button(labels.zoomOut, '−', () => { zoom = Math.max(0.1, zoom - 0.25); update(); });
   tools.append(percentage);
   const larger = button(labels.zoomIn, '+', () => { zoom = Math.min(2, zoom + 0.25); update(); });
-  button(labels.fitWidth, labels.fitWidth, () => { zoom = 1; update(); });
+  const fit = () => {
+    const body = frame.contentDocument.body;
+    body.style.zoom = '1';
+    const width = Math.max(frame.clientWidth, body.scrollWidth);
+    zoom = Math.max(0.1, Math.min(1, frame.clientWidth / width));
+    update();
+    frame.contentWindow.scrollTo(0, frame.contentWindow.scrollY);
+  };
+  button(labels.fitWidth, labels.fitWidth, fit);
+  if (fitWidth) fit();
   toolbar.append(tools);
   const position = document.createElement('p');
   position.className = 'document-viewer-position';

@@ -12,7 +12,7 @@ test('worksheet source windows retain all rows and columns without building a fu
   utils.book_append_sheet(workbook, sheet, 'Large');
   const source = await workbookSource(write(workbook, { type: 'array', bookType: 'xlsx', bookSST: true, compression: true }), 'xlsx');
   assert.equal(source.Sheets, undefined);
-  assert.deepEqual(await sheetInfo(source, 0), { rows: 5001, columns: 128, merges: sheet['!merges'] });
+  assert.deepEqual(await sheetInfo(source, 0), { rows: 5001, columns: 128, merges: sheet['!merges'], columnWidth: 64, columnWidths: {} });
   const tail = await sheetWindow(source, 0, { startRow: 5000, endRow: 5000, startColumn: 127, endColumn: 127 });
   assert.equal(tail.length, 1);
   assert.equal(tail[0].text, 'Beyond old limits 中文');
@@ -49,4 +49,21 @@ test('streamed XML rejects missing parts, unsafe relationships and cancelled req
   assert.equal(columnName(16383), 'XFD');
   assert.throws(() => cellAddress('XFE1'));
   assert.equal(xmlText('&lt;script&gt;&#x4e2d;&#25991;&amp;'), '<script>中文&');
+});
+
+test('worksheet geometry preserves stored column widths and rejects unsafe dimensions', async () => {
+  for (const format of ['xlsx', 'xls']) {
+    const workbook = utils.book_new();
+    const sheet = utils.aoa_to_sheet([['Metric', 'Value'], ['Total', 42]]);
+    sheet['!cols'] = [{ wpx: 140, MDW: 7 }, { wpx: 240, MDW: 7 }];
+    utils.book_append_sheet(workbook, sheet, 'Summary');
+    const source = await workbookSource(write(workbook, { type: 'array', bookType: format }), format);
+    const info = await sheetInfo(source, 0);
+    assert.ok(Math.abs(info.columnWidths[0] - 140) <= 8);
+    assert.ok(Math.abs(info.columnWidths[1] - 240) <= 8);
+  }
+  const zip = await JSZip.loadAsync(sheetFixture());
+  zip.file('xl/worksheets/sheet1.xml', '<worksheet><dimension ref="A1:B2"/><cols><col min="1" max="2" width="NaN"/></cols><sheetData/></worksheet>');
+  const source = await workbookSource(await zip.generateAsync({ type: 'uint8array' }), 'xlsx');
+  await assert.rejects(sheetInfo(source, 0), /column width/);
 });

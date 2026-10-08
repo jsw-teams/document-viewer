@@ -4,6 +4,12 @@ import { elements, cellAddress, textRuns, xmlText } from './xml.js';
 
 const color = value => /^[a-f0-9]{6}$/i.test(value?.slice(-6) || '') ? '#' + value.slice(-6) : undefined;
 
+function columnPixels(value) {
+  const width = Number(value);
+  if (!Number.isFinite(width) || width < 0 || width > 255) throw new Error('Invalid worksheet column width');
+  return Math.floor((256 * width + Math.floor(128 / 7)) / 256 * 7);
+}
+
 export async function workbookSource(data, format) {
   if (data instanceof ArrayBuffer) data = new Uint8Array(data);
   if (format === 'xls') {
@@ -32,7 +38,11 @@ export async function workbookSource(data, format) {
     return { numberFormat: formats.get(Number(entry.attributes.numFmtId)) || SSF.get_table()[Number(entry.attributes.numFmtId)],
       bold: /<(?:[\w.-]+:)?b(?:\s|\/>|>)/.test(font), italic: /<(?:[\w.-]+:)?i(?:\s|\/>|>)/.test(font),
       color: color(elements(font, 'color')[0]?.attributes.rgb), background: color(elements(fill, 'fgColor')[0]?.attributes.rgb),
-      align: ['left', 'right', 'center'].includes(alignment.horizontal) ? alignment.horizontal : undefined };
+      align: ['left', 'right', 'center', 'justify'].includes(alignment.horizontal) ? alignment.horizontal : undefined,
+      wrap: ['1', 'true'].includes(alignment.wrapText),
+      vertical: { top: 'top', center: 'middle', bottom: 'bottom' }[alignment.vertical],
+      font: elements(font, 'name')[0]?.attributes.val?.slice(0, 128),
+      size: Number(elements(font, 'sz')[0]?.attributes.val) || undefined };
   });
   return { data, format, archive, sheets, names: sheets.map(sheet => sheet.name), styles: cellStyles, date1904: ['1', 'true'].includes(elements(workbook, 'workbookPr')[0]?.attributes.date1904) };
 }
@@ -40,10 +50,16 @@ export async function workbookSource(data, format) {
 export async function sheetInfo(source, index, cancelled) {
   if (!source.names[index]) throw new Error('Unknown worksheet');
   if (source.format === 'xls') {
-    const workbook = read(source.data, { type: 'array', sheets: [index], dense: true, cellHTML: false, bookVBA: false });
+    const workbook = read(source.data, { type: 'array', sheets: [index], dense: true, cellHTML: false, cellStyles: true, bookVBA: false });
     const sheet = workbook.Sheets[source.names[index]];
     const range = utils.decode_range(sheet['!ref'] || 'A1');
-    return { rows: range.e.r + 1, columns: range.e.c + 1, merges: sheet['!merges'] || [] };
+    const columnWidths = {};
+    for (const [position, column] of (sheet['!cols'] || []).entries()) {
+      if (!column) continue;
+      const width = column.width === undefined ? column.wpx : columnPixels(column.width);
+      if (Number.isFinite(width) && width > 0 && width <= 1800) columnWidths[position] = width;
+    }
+    return { rows: range.e.r + 1, columns: range.e.c + 1, merges: sheet['!merges'] || [], columnWidth: 64, columnWidths };
   }
   const entry = source.archive.get(source.sheets[index].path);
   let header = '';
@@ -58,12 +74,22 @@ export async function sheetInfo(source, index, cancelled) {
     end = { row: Math.max(end.row, cell.address.row), column: Math.max(end.column, cell.address.column) };
   }, cancelled);
   const merges = [];
+  const columnWidths = {};
+  const defaultWidth = elements(header, 'sheetFormatPr')[0]?.attributes.defaultColWidth;
+  for (const column of elements(header, 'col')) {
+    const begin = Number(column.attributes.min) - 1;
+    const endColumn = Number(column.attributes.max) - 1;
+    if (!Number.isInteger(begin) || !Number.isInteger(endColumn) || begin < 0 || endColumn < begin || endColumn >= 16384) throw new Error('Invalid worksheet column range');
+    if (column.attributes.width === undefined) continue;
+    const width = Math.max(1, columnPixels(column.attributes.width));
+    for (let position = begin; position <= Math.min(end.column, endColumn); position++) columnWidths[position] = width;
+  }
   await scanElements(entry, 'mergeCell', merge => {
     const [start, finish] = merge.attributes.ref.split(':').map(cellAddress);
     if (finish.row < start.row || finish.column < start.column || merges.length >= 100000) throw new Error('Invalid worksheet merges');
     merges.push({ s: { r: start.row, c: start.column }, e: { r: finish.row, c: finish.column } });
   }, cancelled);
-  return { rows: end.row + 1, columns: end.column + 1, merges };
+  return { rows: end.row + 1, columns: end.column + 1, merges, columnWidth: defaultWidth === undefined ? 64 : Math.max(1, columnPixels(defaultWidth)), columnWidths };
 }
 
 export async function sheetWindow(source, index, range, cancelled) {
@@ -89,7 +115,8 @@ export async function sheetWindow(source, index, range, cancelled) {
     if (!anchors.has(address.row + ':' + address.column) && (address.row < range.startRow || address.column < range.startColumn || address.column > range.endColumn)) return;
     const raw = xmlText(elements(cell.content, 'v')[0]?.content || '');
     const type = cell.attributes.t;
-    const style = source.styles[Number(cell.attributes.s)] || {};
+    const style = { ...source.styles[Number(cell.attributes.s)] };
+    if (!style.align && (!type || type === 'n')) style.align = 'right';
     let text = type === 'inlineStr' ? textRuns(cell.content) : raw;
     if (type === 'b') text = raw === '1' ? 'TRUE' : 'FALSE';
     if ((!type || type === 'n') && raw !== '' && Number.isFinite(Number(raw)) && style.numberFormat) {

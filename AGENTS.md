@@ -11,6 +11,7 @@
 - Use continuous separated pages, not previous/next document buttons. Preserve readable text when a legacy PPT shape cannot display it. Parse untrusted HTML in an offscreen inert document before importing sanitized nodes into the script-disabled frame; never grant allow-scripts to suppress warnings.
 - Open previews automatically by default without moving focus; callers can set autoOpen: false for explicit activation. Abort and dispose on close. Respect caller consent and CSP before any request. Do not expose original-download links or legacy PPT warning notes in the viewer UI.
 - Isolate document-generated HTML in a script-disabled sandbox. Block external resources; never execute macros, formulas or document scripts.
+- Keep worksheet grid CSS local to worksheet pages. Preserve native Word paper/table geometry; fit by scaling, not reflowing paper widths. Do not center horizontally overflowing worksheet origins or use fixed page heights that clip short sheets. Cover two-column XLS/XLSX and centered DOCX tables at mobile and desktop widths in regression tests.
 - Bundle dependencies, workers, WASM, fonts and original licenses locally. Fingerprint the dependency graph in integrating sites.
 - Legacy PPT parsing and rendering are project-owned implementations based on Microsoft's public MS-PPT/MS-ODRAW specifications. Do not add proprietary or watermarked engines or copy their source.
 - Keep fixtures and tests under tests. Support keyboard, narrow screens, English and both Chinese locales.

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { utils, write } from 'xlsx';
 import { pdfFixture, wordFixture, sheetFixture, slidesFixture, legacyPpt } from './fixtures.mjs';
+import JSZip from 'jszip';
 
 const output = fileURLToPath(new URL('../dist/', import.meta.url));
 
@@ -68,6 +69,65 @@ async function fixtureServer(provided = new Map()) {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   return { server, requests, ranges, url: 'http://127.0.0.1:' + server.address().port };
 }
+
+test('two-column worksheets retain every cell without centered-page clipping and fit real file widths', { timeout: 60000 }, async () => {
+  const workbook = utils.book_new();
+  const sheet = utils.aoa_to_sheet([['Metric', 'Value'], ['Last row', 'Last column']]);
+  sheet['!cols'] = [{ wpx: 140, MDW: 7 }, { wpx: 240, MDW: 7 }];
+  utils.book_append_sheet(workbook, sheet, 'Summary');
+  const fixtures = new Map(['xlsx', 'xls'].map(format => ['/summary.' + format, write(workbook, { type: 'buffer', bookType: format })]));
+  const { server, url } = await fixtureServer(fixtures);
+  const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
+  try {
+    for (const width of [320, 1280]) {
+      const page = await browser.newPage({ viewport: { width, height: 900 } });
+      await page.goto(url);
+      await page.waitForFunction(() => window.ready);
+      for (const format of ['xlsx', 'xls']) {
+        await page.evaluate(src => window.mount({ src, autoOpen: true }), '/summary.' + format);
+        const frame = page.frameLocator('iframe');
+        await frame.getByText('Last column', { exact: true }).waitFor();
+        const geometry = await frame.getByRole('grid').evaluate(table => {
+          const page = table.closest('[data-document-page]');
+          return { clipped: table.getBoundingClientRect().bottom > page.getBoundingClientRect().bottom, left: page.getBoundingClientRect().left, columns: [...table.querySelectorAll('col')].map(column => column.getBoundingClientRect().width) };
+        });
+        assert.equal(geometry.clipped, false);
+        assert.ok(geometry.left >= 0);
+        assert.ok(Math.abs(geometry.columns[1] - 140) <= 2);
+        assert.ok(Math.abs(geometry.columns[2] - 240) <= 2);
+        await page.getByRole('button', { name: '适合宽度', exact: true }).click();
+        assert.ok(await frame.getByRole('grid').evaluate(table => table.getBoundingClientRect().right <= innerWidth + 1));
+        assert.deepEqual(await page.evaluate(() => window.previewErrors), []);
+      }
+      await page.close();
+    }
+  } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
+test('Word retains native paper and centered two-column table geometry instead of applying worksheet CSS', { timeout: 30000 }, async () => {
+  const zip = await JSZip.loadAsync(await wordFixture());
+  const xml = await zip.file('word/document.xml').async('string');
+  const table = '<w:tbl><w:tblPr><w:tblW w:w="2700" w:type="dxa"/><w:jc w:val="center"/><w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid><w:gridCol w:w="900"/><w:gridCol w:w="1800"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="900" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>Left cell</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:w="1800" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>Right cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>';
+  zip.file('word/document.xml', xml.replace('<w:sectPr>', table + '<w:sectPr>'));
+  const { server, url } = await fixtureServer(new Map([['/centered.docx', await zip.generateAsync({ type: 'nodebuffer' })]]));
+  const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
+  try {
+    const page = await browser.newPage({ viewport: { width: 320, height: 900 } });
+    await page.goto(url);
+    await page.waitForFunction(() => window.ready);
+    await page.evaluate(() => window.mount({ src: '/centered.docx', autoOpen: true }));
+    const frame = page.frameLocator('iframe');
+    await frame.getByText('Right cell', { exact: true }).waitFor();
+    assert.equal(await frame.locator('table').evaluate(table => getComputedStyle(table).display), 'table');
+    assert.ok(await frame.locator('table').evaluate(table => {
+      const zoom = parseFloat(getComputedStyle(document.body).zoom) || 1;
+      return Math.abs(table.getBoundingClientRect().width / zoom - 180) <= 2;
+    }));
+    assert.ok(await frame.locator('section.docx').evaluate(section => section.getBoundingClientRect().width / (parseFloat(getComputedStyle(document.body).zoom) || 1) > 800));
+    await page.getByRole('button', { name: '适合宽度', exact: true }).click();
+    assert.ok(await frame.locator('table').evaluate(table => table.getBoundingClientRect().left >= 0 && table.getBoundingClientRect().right <= innerWidth));
+  } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
 
 test('automatic preview respects consent, avoids focus theft and exposes no download links', { timeout: 20000 }, async () => {
   const { server, requests, url } = await fixtureServer();
@@ -379,7 +439,9 @@ test('browser renderers load only on preview, render real PDF/Office bytes, and 
         assert.deepEqual(await page.evaluate(() => window.previewErrors), []);
         assert.equal(await page.locator('iframe').getAttribute('sandbox'), 'allow-same-origin');
         if (source.endsWith('.docx')) {
-          assert.ok(await page.frameLocator('iframe').locator('section.docx').evaluate(node => node.getBoundingClientRect().width >= innerWidth * 0.8), 'Word page must use the available viewport width');
+          const geometry = await page.frameLocator('iframe').locator('section.docx').evaluate(node => ({ width: node.getBoundingClientRect().width, sourceWidth: parseFloat(getComputedStyle(node).width), viewport: innerWidth }));
+          assert.ok(geometry.width <= geometry.viewport, 'Word paper must fit without horizontal clipping');
+          assert.ok(geometry.width >= Math.min(geometry.sourceWidth, geometry.viewport - 24) * 0.95, 'Word must retain native paper width, fitting smaller viewports without reflow');
         }
         if (source.endsWith('.ppt')) {
           await page.frameLocator('iframe').locator('[data-document-page="2"]').scrollIntoViewIfNeeded();
