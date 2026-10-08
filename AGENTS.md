@@ -1,7 +1,7 @@
 # Document viewer development
 
 - Keep this a reusable browser-only library. No LibreOffice, conversion servers, accounts, uploads, analytics, CDN runtime or browser persistent storage.
-- Load the selected document and renderer only after explicit preview. Abort and dispose on close. Respect caller consent and CSP.
+- Open previews automatically by default without moving focus; callers can set autoOpen: false for explicit activation. Abort and dispose on close. Respect caller consent and CSP before any request. Do not expose original-download links or legacy PPT warning notes in the viewer UI.
 - Isolate document-generated HTML in a script-disabled sandbox. Block external resources; never execute macros, formulas or document scripts.
 - Bundle dependencies, workers, WASM, fonts and original licenses locally. Fingerprint the dependency graph in integrating sites.
 - Legacy PPT parsing and rendering are project-owned implementations based on Microsoft's public MS-PPT/MS-ODRAW specifications. Do not add proprietary or watermarked engines or copy their source.

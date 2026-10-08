@@ -30,7 +30,7 @@ async function fixtureServer(provided = new Map()) {
     }
     if (path === '/fixture.js') {
       response.setHeader('Content-Type', 'text/javascript');
-      response.end('import {mountDocument} from "/index.js"; window.mount = options => { window.viewer?.destroy(); window.previewErrors=[]; window.viewer=mountDocument(document.querySelector("#preview"),{locale:"zh-CN",title:"Document",...options,onError:error=>window.previewErrors.push(error.message)}); }; window.ready=true;');
+      response.end('import {mountDocument} from "/index.js"; window.mount = options => { window.viewer?.destroy(); window.previewErrors=[]; window.viewer=mountDocument(document.querySelector("#preview"),{autoOpen:false,locale:"zh-CN",title:"Document",...options,onError:error=>window.previewErrors.push(error.message)}); }; window.ready=true;');
       return;
     }
     if (path === '/axe.js') {
@@ -51,6 +51,28 @@ async function fixtureServer(provided = new Map()) {
   return { server, requests, url: 'http://127.0.0.1:' + server.address().port };
 }
 
+test('automatic preview respects consent, avoids focus theft and exposes no download links', { timeout: 20000 }, async () => {
+  const { server, requests, url } = await fixtureServer();
+  const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
+  try {
+    const page = await browser.newPage();
+    const errors = [];
+    page.on('download', () => errors.push('Unexpected download'));
+    await page.goto(url);
+    await page.waitForFunction(() => window.ready);
+    await page.evaluate(() => window.mount({ src: '/report.xlsx', autoOpen: true, canLoad: () => false }));
+    assert.ok(!requests.includes('/report.xlsx'));
+    assert.equal(await page.locator('iframe').count(), 0);
+    await page.evaluate(() => window.mount({ src: '/report.xlsx', autoOpen: true }));
+    await page.frameLocator('iframe').getByText('First sheet', { exact: true }).waitFor();
+    assert.equal(await page.locator('.document-viewer a').count(), 0);
+    assert.equal(await page.evaluate(() => document.activeElement === document.body), true);
+    assert.deepEqual(errors, []);
+    await page.evaluate(() => window.viewer.destroy());
+    assert.equal(await page.locator('iframe').count(), 0);
+  } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
 test('legacy PPT Worker renders independently without a vendor engine', { timeout: 20000 }, async () => {
   const { server, url } = await fixtureServer();
   const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
@@ -63,6 +85,8 @@ test('legacy PPT Worker renders independently without a vendor engine', { timeou
     await page.waitForFunction(() => window.previewErrors.length || document.querySelector('iframe')?.contentDocument?.querySelector('svg'));
     assert.deepEqual(await page.evaluate(() => window.previewErrors), []);
     await page.frameLocator('iframe').getByText('First slide: 中文', { exact: true }).waitFor();
+    await page.locator('.document-viewer-viewport[aria-busy="false"]').waitFor();
+    assert.equal(await page.locator('.document-viewer-status').textContent(), '');
   } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
 });
 
@@ -156,6 +180,9 @@ test('operator-provided Office samples render without downloads', { timeout: 120
     const errors = [];
     page.on('download', () => errors.push('Unexpected download'));
     page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => {
+      if (/Blocked script execution|webmcp-interceptor|modelContext is not available/.test(message.text())) errors.push(message.text());
+    });
     await page.goto(url);
     await page.waitForFunction(() => window.ready);
     for (const name of names) {
@@ -182,6 +209,9 @@ test('browser renderers load only on preview, render real PDF/Office bytes, and 
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));
       page.on('download', () => errors.push('Unexpected browser download instead of inline preview'));
+      page.on('console', message => {
+        if (/Blocked script execution|webmcp-interceptor|modelContext is not available/.test(message.text())) errors.push(message.text());
+      });
       await context.route('https://blocked.example/**', route => { errors.push('Unexpected external resource'); return route.abort(); });
       await page.goto(url);
       await page.waitForFunction(() => window.ready);

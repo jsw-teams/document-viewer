@@ -87,7 +87,6 @@ export async function render({ data, frame, controls, signal, labels, status, se
   });
   previous.addEventListener('click', () => { current = Math.max(0, current - 1); draw(); });
   next.addEventListener('click', () => { current = Math.min(presentation.slides.length - 1, current + 1); draw(); });
-  status.textContent = labels.pptLimited;
   draw();
   return cleanup;
 }

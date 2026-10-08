@@ -51,13 +51,7 @@ export function mountDocument(container, options) {
   closeButton.type = 'button';
   closeButton.textContent = labels.close;
   closeButton.hidden = true;
-  const download = document.createElement('a');
-  download.href = source.href;
-  download.download = '';
-  download.rel = 'noopener noreferrer';
-  download.referrerPolicy = 'no-referrer';
-  download.textContent = labels.download;
-  toolbar.append(previewButton, closeButton, download);
+  toolbar.append(previewButton, closeButton);
   root.append(heading, toolbar, status, viewport);
   container.replaceChildren(root);
   const stopTheme = followTheme(root, container);
@@ -86,7 +80,7 @@ export function mountDocument(container, options) {
     if (restoreFocus && !disposed) previewButton.focus();
   }
 
-  async function open() {
+  async function open({ focus = true } = {}) {
     if (disposed || active || (options.canLoad && !options.canLoad())) return;
     const session = { controller: new AbortController(), cleanup: null };
     active = session;
@@ -98,7 +92,7 @@ export function mountDocument(container, options) {
     viewport.setAttribute('aria-busy', 'true');
     status.textContent = labels.loading;
     toolbar.after(controls);
-    closeButton.focus();
+    if (focus) closeButton.focus();
     const guard = callback => (...args) => {
       if (active === session && !signal.aborted) return callback(...args);
     };
@@ -122,12 +116,13 @@ export function mountDocument(container, options) {
       close(false);
       status.textContent = labels.error;
       options.onError?.(error);
-      previewButton.focus();
+      if (focus) previewButton.focus();
     }
   }
 
-  previewButton.addEventListener('click', open);
+  previewButton.addEventListener('click', () => open());
   closeButton.addEventListener('click', () => close());
   root.addEventListener('keydown', event => { if (event.key === 'Escape' && active) { event.preventDefault(); close(); } });
+  if (options.autoOpen !== false) void open({ focus: false });
   return { open, close, destroy() { disposed = true; close(false); stopTheme(); root.remove(); } };
 }
