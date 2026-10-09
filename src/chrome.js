@@ -1,3 +1,5 @@
+import { buttonContent } from './icons.js';
+
 export function previewChrome({ root, toolbar, frame, signal, labels, fitWidth = false }) {
   const tools = document.createElement('div');
   tools.className = 'document-viewer-view-tools';
@@ -5,11 +7,10 @@ export function previewChrome({ root, toolbar, frame, signal, labels, fitWidth =
   percentage.textContent = '100%';
   let zoom = 1;
   let fitting = fitWidth;
-  const button = (label, text, action) => {
+  const button = (label, icon, action, iconOnly = false) => {
     const node = document.createElement('button');
     node.type = 'button';
-    node.setAttribute('aria-label', label);
-    node.textContent = text;
+    buttonContent(node, label, icon, iconOnly);
     node.addEventListener('click', action, { signal });
     tools.append(node);
     return node;
@@ -21,9 +22,9 @@ export function previewChrome({ root, toolbar, frame, signal, labels, fitWidth =
     larger.disabled = zoom >= 2;
     frame.contentWindow.dispatchEvent(new CustomEvent('document-viewer-zoom', { detail: zoom }));
   };
-  const smaller = button(labels.zoomOut, '−', () => { fitting = false; zoom = Math.max(0.1, zoom - 0.25); update(); });
+  const smaller = button(labels.zoomOut, 'zoomOut', () => { fitting = false; zoom = Math.max(0.1, zoom - 0.25); update(); }, true);
   tools.append(percentage);
-  const larger = button(labels.zoomIn, '+', () => { fitting = false; zoom = Math.min(2, zoom + 0.25); update(); });
+  const larger = button(labels.zoomIn, 'zoomIn', () => { fitting = false; zoom = Math.min(2, zoom + 0.25); update(); }, true);
   const fit = () => {
     fitting = true;
     const body = frame.contentDocument.body;
@@ -33,7 +34,7 @@ export function previewChrome({ root, toolbar, frame, signal, labels, fitWidth =
     update();
     frame.contentWindow.scrollTo(0, frame.contentWindow.scrollY);
   };
-  button(labels.fitWidth, labels.fitWidth, fit);
+  button(labels.fitWidth, 'fit', fit);
   if (fitWidth) fit();
   toolbar.append(tools);
   const position = document.createElement('p');

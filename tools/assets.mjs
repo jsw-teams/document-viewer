@@ -48,6 +48,7 @@ export async function documentViewerAssets(prefix = 'document-viewer') {
   assets.push({ path: prefix + '/styles.css', content: Buffer.from(styles.outputFiles[0].contents), sourceName: 'document-viewer component' });
   for (const file of pdfResources) assets.push({ ...file, path: prefix + '/' + pdfName + '/' + file.path, sourceName: 'PDF.js resources' });
   const licenses = [
+    ['Lucide', resolve(root, 'src/lucide-license.txt')],
     ['PDF.js', resolve(pdfRoot, 'LICENSE')],
     ['docx-preview', resolve(dirname(require.resolve('docx-preview')), '../LICENSE')],
     ['pptx-renderer', resolve(dirname(require.resolve('@aiden0z/pptx-renderer')), '../LICENSE')],

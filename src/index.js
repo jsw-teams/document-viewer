@@ -6,6 +6,7 @@ import { validateOfficeZip } from './zip-limits.js';
 import { followTheme } from './theme.js';
 import { previewChrome } from './chrome.js';
 import { windowDocumentPages } from './windowed-pages.js';
+import { buttonContent } from './icons.js';
 
 export { documentFormat, documentUrl, documentLabels };
 
@@ -59,20 +60,22 @@ export function mountDocument(container, options) {
   viewport.hidden = true;
   const previewButton = document.createElement('button');
   previewButton.type = 'button';
-  previewButton.textContent = labels.preview;
+  buttonContent(previewButton, labels.preview, 'eye');
   previewButton.setAttribute('aria-controls', viewport.id);
   previewButton.setAttribute('aria-expanded', 'false');
   const closeButton = document.createElement('button');
   closeButton.type = 'button';
-  closeButton.textContent = labels.close;
+  buttonContent(closeButton, labels.close, 'x');
   closeButton.hidden = true;
   const expandButton = document.createElement('button');
   expandButton.type = 'button';
   expandButton.className = 'document-viewer-expand';
-  expandButton.textContent = labels.expand;
+  buttonContent(expandButton, labels.expand, 'expand', true);
+  expandButton.setAttribute('aria-controls', viewport.id);
   expandButton.setAttribute('aria-expanded', 'false');
   expandButton.hidden = true;
-  toolbar.append(previewButton, closeButton, expandButton);
+  toolbar.append(previewButton, closeButton);
+  viewport.append(expandButton);
   root.append(header, toolbar, status, viewport);
   container.replaceChildren(root);
   const stopTheme = followTheme(root, container);
@@ -91,7 +94,7 @@ export function mountDocument(container, options) {
     root.removeAttribute('data-expanded');
     root.setAttribute('role', 'region');
     root.removeAttribute('aria-modal');
-    expandButton.textContent = labels.expand;
+    buttonContent(expandButton, labels.expand, 'expand', true);
     expandButton.setAttribute('aria-expanded', 'false');
     document.documentElement.style.overflow = previousOverflow;
     if (restoreFocus && !disposed) expandButton.focus({ preventScroll: true });
@@ -106,7 +109,7 @@ export function mountDocument(container, options) {
     root.showModal();
     expanded = true;
     document.documentElement.style.overflow = 'hidden';
-    expandButton.textContent = labels.collapse;
+    buttonContent(expandButton, labels.collapse, 'collapse', true);
     expandButton.setAttribute('aria-expanded', 'true');
     expandButton.focus({ preventScroll: true });
   });
@@ -120,7 +123,7 @@ export function mountDocument(container, options) {
     previous?.cleanup?.();
     controls.replaceChildren();
     controls.remove();
-    viewport.replaceChildren();
+    viewport.replaceChildren(expandButton);
     viewport.hidden = true;
     viewport.removeAttribute('aria-busy');
     viewport.removeAttribute('role');

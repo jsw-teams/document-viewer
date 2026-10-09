@@ -70,6 +70,144 @@ async function fixtureServer(provided = new Map()) {
   return { server, requests, ranges, url: 'http://127.0.0.1:' + server.address().port };
 }
 
+test('column grips resize without redecoding, restore, cancel and survive worksheet eviction', { timeout: 60000 }, async () => {
+  const workbook = utils.book_new();
+  const sheet = utils.aoa_to_sheet(Array.from({ length: 301 }, (_, index) => ['Row ' + index, 'Value ' + index]));
+  sheet['!cols'] = [{ wpx: 140, MDW: 7 }, { wpx: 240, MDW: 7 }];
+  utils.book_append_sheet(workbook, sheet, 'Data');
+  utils.book_append_sheet(workbook, utils.aoa_to_sheet([['Second worksheet']]), 'Other');
+  const fixtures = new Map(['xlsx', 'xls'].map(format => ['/resize.' + format, write(workbook, { type: 'buffer', bookType: format })]));
+  const { server, url } = await fixtureServer(fixtures);
+  const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+    await page.goto(url);
+    await page.waitForFunction(() => window.ready);
+    await page.evaluate(() => {
+      const post = Worker.prototype.postMessage;
+      window.decodedWindows = 0;
+      Worker.prototype.postMessage = function(message, ...arguments_) { if (message.action === 'window') window.decodedWindows++; return post.call(this, message, ...arguments_); };
+    });
+    for (const format of ['xlsx', 'xls']) {
+      await page.evaluate(src => window.mount({ src, autoOpen: true }), '/resize.' + format);
+      const frame = page.frameLocator('iframe');
+      const grip = frame.locator('[data-resize-column="0"]').first();
+      await grip.waitFor();
+      await page.waitForTimeout(150);
+      const original = Number(await grip.getAttribute('aria-valuenow'));
+      const decoded = await page.evaluate(() => window.decodedWindows);
+      const box = await grip.boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2 + 80, box.y + box.height / 2, { steps: 8 });
+      await page.mouse.up();
+      assert.equal(Number(await grip.getAttribute('aria-valuenow')), original + 80);
+      assert.equal(await page.evaluate(() => window.decodedWindows), decoded);
+      await grip.focus();
+      await page.keyboard.press('ArrowRight');
+      await page.keyboard.press('Shift+ArrowLeft');
+      assert.equal(Number(await grip.getAttribute('aria-valuenow')), original + 87);
+      const cancelBox = await grip.boundingBox();
+      await page.mouse.move(cancelBox.x + 12, cancelBox.y + 22);
+      await page.mouse.down();
+      await page.mouse.move(cancelBox.x + 62, cancelBox.y + 22);
+      await page.keyboard.press('Escape');
+      await page.mouse.up();
+      assert.equal(await page.locator('iframe').count(), 1);
+      assert.equal(Number(await grip.getAttribute('aria-valuenow')), original + 87);
+      const address = page.getByRole('textbox', { name: '单元格地址' });
+      await address.fill('A251');
+      await page.getByRole('button', { name: '定位', exact: true }).click();
+      await frame.getByText('Row 250', { exact: true }).waitFor();
+      assert.equal(Number(await grip.getAttribute('aria-valuenow')), original + 87);
+      assert.ok(await frame.getByRole('grid').count() <= 5);
+      await page.getByRole('tab', { name: 'Other', exact: true }).click();
+      await frame.getByText('Second worksheet', { exact: true }).waitFor();
+      await page.getByRole('tab', { name: 'Data', exact: true }).click();
+      await frame.getByText('Row 0', { exact: true }).waitFor();
+      assert.equal(Number(await grip.getAttribute('aria-valuenow')), original + 87);
+      await page.getByRole('button', { name: '恢复原列宽', exact: true }).click();
+      assert.equal(Number(await grip.getAttribute('aria-valuenow')), original);
+      await page.getByRole('button', { name: '铺满视口', exact: true }).click();
+      assert.equal(await page.getByRole('button', { name: '铺满视口' }).getAttribute('aria-pressed'), 'true');
+      assert.ok(await frame.getByRole('grid').first().evaluate(table => Math.abs(table.getBoundingClientRect().width - (innerWidth - 24)) <= 2));
+      await page.getByRole('button', { name: '恢复原列宽', exact: true }).click();
+      await page.getByRole('button', { name: '放大', exact: true }).click();
+      const zoomBox = await grip.boundingBox();
+      await page.mouse.move(zoomBox.x + zoomBox.width / 2, zoomBox.y + zoomBox.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(zoomBox.x + zoomBox.width / 2 + 100, zoomBox.y + zoomBox.height / 2);
+      await page.mouse.up();
+      assert.equal(Number(await grip.getAttribute('aria-valuenow')), original + 80);
+      await grip.dblclick();
+      assert.equal(Number(await grip.getAttribute('aria-valuenow')), original);
+      assert.deepEqual(await page.evaluate(() => window.previewErrors), []);
+    }
+  } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
+test('touch column resizing and keyboard limits use the same reversible display geometry', { timeout: 30000 }, async () => {
+  const { server, url } = await fixtureServer();
+  const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
+  try {
+    const page = await browser.newPage({ viewport: { width: 820, height: 900 }, hasTouch: true });
+    await page.goto(url);
+    await page.waitForFunction(() => window.ready);
+    await page.evaluate(() => window.mount({ src: '/report.xlsx', autoOpen: true }));
+    const grip = page.frameLocator('iframe').locator('[data-resize-column="0"]').first();
+    await grip.waitFor();
+    const original = Number(await grip.getAttribute('aria-valuenow'));
+    const box = await grip.boundingBox();
+    const session = await page.context().newCDPSession(page);
+    const touch = (type, distance = 0) => session.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x: box.x + box.width / 2 + distance, y: box.y + box.height / 2, id: 1 }] });
+    await touch('touchStart');
+    await touch('touchMove', 64);
+    await touch('touchEnd');
+    assert.equal(Number(await grip.getAttribute('aria-valuenow')), original + 64);
+    assert.equal(await grip.evaluate(element => getComputedStyle(element).touchAction), 'none');
+    await grip.focus();
+    await page.keyboard.press('End');
+    assert.equal(Number(await grip.getAttribute('aria-valuenow')), 2400);
+    await page.keyboard.press('Home');
+    assert.equal(Number(await grip.getAttribute('aria-valuenow')), 24);
+    await page.keyboard.press('ArrowLeft');
+    assert.equal(Number(await grip.getAttribute('aria-valuenow')), 24);
+    await page.getByRole('button', { name: '恢复原列宽', exact: true }).click();
+    assert.equal(Number(await grip.getAttribute('aria-valuenow')), original);
+    assert.equal(await grip.getAttribute('aria-orientation'), 'vertical');
+    assert.ok(await grip.getAttribute('aria-controls'));
+    assert.deepEqual(await page.evaluate(() => window.previewErrors), []);
+    await session.detach();
+  } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
+test('localized local icons and in-document workspace controls retain frame identity and focus', { timeout: 60000 }, async () => {
+  const { server, url } = await fixtureServer();
+  const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 900 } });
+    await page.goto(url);
+    await page.waitForFunction(() => window.ready);
+    for (const [locale, expand, collapse] of [['en', 'Expand workspace', 'Return to page'], ['zh-SG', '展开工作区', '返回页面'], ['zh-TW', '展開工作區', '返回頁面']]) {
+      for (const format of ['pdf', 'docx', 'ppt', 'pptx', 'xls', 'xlsx']) {
+        await page.evaluate(options => window.mount(options), { src: '/report.' + format, locale, autoOpen: true });
+        await page.locator('.document-viewer-viewport[aria-busy="false"]').waitFor();
+        const button = page.getByRole('button', { name: expand, exact: true });
+        assert.equal(await button.evaluate(element => element.parentElement.className), 'document-viewer-viewport');
+        assert.equal(await page.locator('.document-viewer button').evaluateAll(buttons => buttons.every(button => button.querySelector('svg[aria-hidden="true"]') && button.getAttribute('aria-label'))), true);
+        await page.evaluate(() => { window.originalFrame = document.querySelector('iframe'); });
+        await button.click();
+        assert.equal(await page.getByRole('button', { name: collapse, exact: true }).locator('svg').getAttribute('data-icon'), 'collapse');
+        await page.keyboard.press('Escape');
+        assert.equal(await page.evaluate(() => document.querySelector('iframe') === window.originalFrame), true);
+        assert.equal(await button.evaluate(element => element === document.activeElement), true);
+        assert.equal(await page.locator('iframe').getAttribute('sandbox'), 'allow-same-origin');
+        assert.deepEqual(await page.evaluate(() => window.previewErrors), []);
+      }
+    }
+  } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
 test('two-column worksheets retain every cell without centered-page clipping and fit real file widths', { timeout: 60000 }, async () => {
   const workbook = utils.book_new();
   const sheet = utils.aoa_to_sheet([['Metric', 'Value'], ['Last row', 'Last column']]);

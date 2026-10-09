@@ -1,6 +1,9 @@
 import { documentPage } from '../pages.js';
 import { cellAddress, columnName } from '../sheets/xml.js';
 import { applyCellStyle } from '../sheets/styles.js';
+import { buttonContent } from '../icons.js';
+import { columnLayout } from '../sheets/columns.js';
+import { columnControls } from '../sheets/column-controls.js';
 
 export async function render({ data, format, frame, viewport, controls, signal, labels, status, setCleanup }) {
   const worker = new Worker(new URL('../sheets.worker.js', import.meta.url), { type: 'module' });
@@ -23,10 +26,13 @@ export async function render({ data, format, frame, viewport, controls, signal, 
   let drawing = null;
   let repeat = false;
   const doc = frame.contentDocument;
+  let widths = null;
   const cleanup = () => {
     revision++;
     clearTimeout(timer);
     observer?.disconnect();
+    widths?.destroy();
+    widths = null;
     worker.terminate();
     for (const request of pending.values()) request.reject(new DOMException('Worksheet closed', 'AbortError'));
     pending.clear();
@@ -67,12 +73,14 @@ export async function render({ data, format, frame, viewport, controls, signal, 
   address.spellcheck = false;
   const jump = document.createElement('button');
   jump.type = 'submit';
-  jump.textContent = labels.go;
+  buttonContent(jump, labels.go, 'locate');
   const value = document.createElement('output');
   value.setAttribute('aria-label', labels.cellValue);
   value.tabIndex = 0;
   formulaBar.append(address, jump, value);
   controls.append(formulaBar);
+  widths = columnControls({ frame, controls, signal, labels,
+    current: () => ({ index: selected, metadata, offsets: columnOffsets }), changed: updateColumns });
   const tabs = document.createElement('div');
   tabs.className = 'document-viewer-sheets';
   tabs.setAttribute('role', 'tablist');
@@ -91,7 +99,7 @@ export async function render({ data, format, frame, viewport, controls, signal, 
     button.id = viewport.id + '-sheet-' + index;
     button.setAttribute('role', 'tab');
     button.setAttribute('aria-controls', viewport.id);
-    button.textContent = name;
+    buttonContent(button, name, 'table');
     tabs.append(button);
     return button;
   });
@@ -102,6 +110,30 @@ export async function render({ data, format, frame, viewport, controls, signal, 
   gridStyle.textContent = '.sheet-grid{font-size:11pt}.sheet-grid th,.sheet-grid td{height:var(--sheet-row-height,20px);padding:1px 3px;line-height:normal}.sheet-grid thead th,.sheet-grid thead td{height:24px}.sheet-cell-content{display:block;max-height:var(--sheet-cell-height);overflow:hidden;white-space:inherit;text-overflow:ellipsis}.sheet-grid[data-grid-lines=false] td{border-color:transparent}.sheet-grid td[aria-selected=true]{outline:2px solid var(--document-viewer-accent);outline-offset:-2px}';
   doc.head.append(gridStyle);
   const rowHeight = row => hiddenRows.has(row) ? 0 : metadata.rowHeights?.[row] ?? metadata.rowHeight;
+  function updateColumns(settle = false) {
+    if (!metadata || !widths) return;
+    const zoom = parseFloat(frame.contentWindow.getComputedStyle(doc.body).zoom) || 1;
+    columnOffsets = columnLayout(metadata, widths.preference(selected), Math.max(0, doc.documentElement.clientWidth / zoom - 24 - 48));
+    const total = 48 + columnOffsets[metadata.columns];
+    for (const page of pages) page.style.width = total + 'px';
+    for (const table of doc.querySelectorAll('.sheet-grid')) {
+      table.style.width = total + 'px';
+      for (const node of table.querySelectorAll('col[data-column]')) {
+        const index = Number(node.dataset.column);
+        node.style.width = (columnOffsets[index + 1] - columnOffsets[index]) + 'px';
+      }
+      for (const node of table.querySelectorAll('[data-sheet-spacer]')) node.style.width = (node.dataset.sheetSpacer === 'leading' ? columnOffsets[Number(table.dataset.startColumn)] : columnOffsets[metadata.columns] - columnOffsets[Number(table.dataset.endColumn) + 1]) + 'px';
+    }
+    widths.update();
+    if (settle) fitCells(doc);
+  }
+  function fitCells(root) {
+    for (const content of root.querySelectorAll('[data-shrink]')) {
+      content.style.fontSize = '';
+      const width = Math.max(1, content.parentElement.clientWidth - 6);
+      if (content.scrollWidth > width) content.style.fontSize = Math.max(1, parseFloat(frame.contentWindow.getComputedStyle(content).fontSize) * width / content.scrollWidth) + 'px';
+    }
+  }
   function chooseCell(cell) {
     active = { row: Number(cell.dataset.row), column: Number(cell.dataset.column) };
     address.value = columnName(active.column) + (active.row + 1);
@@ -125,15 +157,18 @@ export async function render({ data, format, frame, viewport, controls, signal, 
     const start = index * 50;
     const end = Math.min(metadata.rows - 1, start + 49);
     const endColumn = Math.min(metadata.columns - 1, column + 19);
+    table.dataset.startColumn = String(column);
+    table.dataset.endColumn = String(endColumn);
     const merges = metadata.merges.filter(item => item.s.r <= end && item.e.r >= start && item.s.c <= endColumn && item.e.c >= column);
     const values = new Map(cells.map(cell => [cell.row + ':' + cell.column, cell]));
     const head = doc.createElement('thead');
     const headings = doc.createElement('tr');
     headings.append(doc.createElement('td'));
-    const spacer = (line, width) => {
+    const spacer = (line, width, side) => {
       if (!width) return;
       const node = doc.createElement('td');
       node.className = 'sheet-spacer';
+      node.dataset.sheetSpacer = side;
       node.style.width = width + 'px';
       node.setAttribute('aria-hidden', 'true');
       line.append(node);
@@ -142,20 +177,22 @@ export async function render({ data, format, frame, viewport, controls, signal, 
     const gutter = doc.createElement('col');
     gutter.style.width = '48px';
     columns.append(gutter);
-    const addColumn = width => { const node = doc.createElement('col'); node.style.width = width + 'px'; columns.append(node); };
-    if (column) addColumn(columnOffsets[column]);
-    spacer(headings, columnOffsets[column]);
+    const addColumn = (width, index, side) => { const node = doc.createElement('col'); node.style.width = width + 'px'; if (index !== null) node.dataset.column = String(index); else node.dataset.sheetSpacer = side; columns.append(node); };
+    if (columnOffsets[column]) addColumn(columnOffsets[column], null, 'leading');
+    spacer(headings, columnOffsets[column], 'leading');
     for (let current = column; current <= endColumn; current++) {
       if (hiddenColumns.has(current)) continue;
-      addColumn(columnOffsets[current + 1] - columnOffsets[current]);
+      addColumn(columnOffsets[current + 1] - columnOffsets[current], current);
       const heading = doc.createElement('th');
       heading.scope = 'col';
+      heading.id = viewport.id + '-page-' + index + '-column-' + current;
       heading.textContent = columnName(current);
+      heading.append(widths.handle(current, heading));
       headings.append(heading);
     }
     const remaining = columnOffsets[metadata.columns] - columnOffsets[endColumn + 1];
-    if (remaining) addColumn(remaining);
-    spacer(headings, remaining);
+    if (remaining) addColumn(remaining, null, 'trailing');
+    spacer(headings, remaining, 'trailing');
     head.append(headings);
     const body = doc.createElement('tbody');
     for (let row = start; row <= end; row++) {
@@ -167,7 +204,7 @@ export async function render({ data, format, frame, viewport, controls, signal, 
       heading.scope = 'row';
       heading.textContent = String(row + 1);
       line.append(heading);
-      spacer(line, columnOffsets[column]);
+      spacer(line, columnOffsets[column], 'leading');
       for (let current = column; current <= endColumn; current++) {
         if (hiddenColumns.has(current)) continue;
         const merge = merges.find(item => row >= item.s.r && row <= item.e.r && current >= item.s.c && current <= item.e.c);
@@ -212,7 +249,7 @@ export async function render({ data, format, frame, viewport, controls, signal, 
         if (row === active.row && current === active.column) chooseCell(node);
         line.append(node);
       }
-      spacer(line, remaining);
+      spacer(line, remaining, 'trailing');
       body.append(line);
     }
     table.append(caption, columns, head, body);
@@ -250,10 +287,8 @@ export async function render({ data, format, frame, viewport, controls, signal, 
         if (!visible.has(index)) continue;
         pages[index].querySelector('table')?.remove();
         pages[index].append(tableFor(index, cells));
-        for (const content of pages[index].querySelectorAll('[data-shrink]')) {
-          const width = Math.max(1, content.parentElement.clientWidth - 6);
-          if (content.scrollWidth > width) content.style.fontSize = Math.max(1, parseFloat(frame.contentWindow.getComputedStyle(content).fontSize) * width / content.scrollWidth) + 'px';
-        }
+        widths.update();
+        fitCells(pages[index]);
         const zoom = parseFloat(frame.contentWindow.getComputedStyle(doc.body).zoom) || 1;
         pages[index].style.minHeight = Math.ceil(pages[index].getBoundingClientRect().height / zoom) + 'px';
         pages[index].setAttribute('aria-busy', 'false');
@@ -263,6 +298,7 @@ export async function render({ data, format, frame, viewport, controls, signal, 
     } catch (error) { if (!signal.aborted && error.name !== 'AbortError') status.textContent = labels.error; }
   }
   async function select(index) {
+    widths.finish();
     const version = ++revision;
     navigation++;
     clearTimeout(timer);
@@ -285,8 +321,8 @@ export async function render({ data, format, frame, viewport, controls, signal, 
       metadata = info;
       hiddenRows = new Set(info.hiddenRows);
       hiddenColumns = new Set(info.hiddenColumns);
-      columnOffsets = [0];
-      for (let current = 0; current < info.columns; current++) columnOffsets.push(columnOffsets[current] + (hiddenColumns.has(current) ? 0 : info.columnWidths?.[current] ?? info.columnWidth ?? 64));
+      pages = [];
+      updateColumns();
       dimensions.textContent = info.rows.toLocaleString() + ' × ' + info.columns.toLocaleString();
       const count = Math.ceil(info.rows / 50);
       pages = Array.from({ length: count }, (_, current) => {
