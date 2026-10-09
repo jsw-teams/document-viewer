@@ -11,6 +11,14 @@ import JSZip from 'jszip';
 
 const output = fileURLToPath(new URL('../dist/', import.meta.url));
 
+async function frameElementBox(page, selector) {
+  return page.locator('iframe').evaluate((frame, selector) => {
+    const outer = frame.getBoundingClientRect();
+    const inner = frame.contentDocument.querySelector(selector).getBoundingClientRect();
+    return { x: outer.x + frame.clientLeft + inner.x, y: outer.y + frame.clientTop + inner.y, width: inner.width, height: inner.height };
+  }, selector);
+}
+
 async function fixtureServer(provided = new Map()) {
   const fixtures = new Map([
     ['/report.pdf', pdfFixture()], ['/report.docx', await wordFixture()],
@@ -81,6 +89,8 @@ test('column grips resize without redecoding, restore, cancel and survive worksh
   const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+    const sandboxWarnings = [];
+    page.on('console', message => { if (/Blocked script execution/.test(message.text())) sandboxWarnings.push(message.text()); });
     await page.goto(url);
     await page.waitForFunction(() => window.ready);
     await page.evaluate(() => {
@@ -96,7 +106,7 @@ test('column grips resize without redecoding, restore, cancel and survive worksh
       await page.waitForTimeout(150);
       const original = Number(await grip.getAttribute('aria-valuenow'));
       const decoded = await page.evaluate(() => window.decodedWindows);
-      const box = await grip.boundingBox();
+      const box = await frameElementBox(page, '[data-resize-column="0"]');
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       await page.mouse.down();
       await page.mouse.move(box.x + box.width / 2 + 80, box.y + box.height / 2, { steps: 8 });
@@ -107,7 +117,7 @@ test('column grips resize without redecoding, restore, cancel and survive worksh
       await page.keyboard.press('ArrowRight');
       await page.keyboard.press('Shift+ArrowLeft');
       assert.equal(Number(await grip.getAttribute('aria-valuenow')), original + 87);
-      const cancelBox = await grip.boundingBox();
+      const cancelBox = await frameElementBox(page, '[data-resize-column="0"]');
       await page.mouse.move(cancelBox.x + 12, cancelBox.y + 22);
       await page.mouse.down();
       await page.mouse.move(cancelBox.x + 62, cancelBox.y + 22);
@@ -130,19 +140,21 @@ test('column grips resize without redecoding, restore, cancel and survive worksh
       assert.equal(Number(await grip.getAttribute('aria-valuenow')), original);
       await page.getByRole('button', { name: '铺满视口', exact: true }).click();
       assert.equal(await page.getByRole('button', { name: '铺满视口' }).getAttribute('aria-pressed'), 'true');
-      assert.ok(await frame.getByRole('grid').first().evaluate(table => Math.abs(table.getBoundingClientRect().width - (innerWidth - 24)) <= 2));
+      assert.ok(await page.locator('iframe').evaluate(frame => Math.abs(frame.contentDocument.querySelector('[role="grid"]').getBoundingClientRect().width - (frame.contentWindow.innerWidth - 24)) <= 2));
       await page.getByRole('button', { name: '恢复原列宽', exact: true }).click();
       await page.getByRole('button', { name: '放大', exact: true }).click();
-      const zoomBox = await grip.boundingBox();
+      const zoomBox = await frameElementBox(page, '[data-resize-column="0"]');
       await page.mouse.move(zoomBox.x + zoomBox.width / 2, zoomBox.y + zoomBox.height / 2);
       await page.mouse.down();
       await page.mouse.move(zoomBox.x + zoomBox.width / 2 + 100, zoomBox.y + zoomBox.height / 2);
       await page.mouse.up();
       assert.equal(Number(await grip.getAttribute('aria-valuenow')), original + 80);
-      await grip.dblclick();
+      const resetBox = await frameElementBox(page, '[data-resize-column="0"]');
+      await page.mouse.dblclick(resetBox.x + resetBox.width / 2, resetBox.y + resetBox.height / 2);
       assert.equal(Number(await grip.getAttribute('aria-valuenow')), original);
       assert.deepEqual(await page.evaluate(() => window.previewErrors), []);
     }
+    assert.deepEqual(sandboxWarnings, []);
   } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 });
 
@@ -151,20 +163,22 @@ test('touch column resizing and keyboard limits use the same reversible display 
   const browser = await chromium.launch({ headless: true, args: ['--disable-extensions'] });
   try {
     const page = await browser.newPage({ viewport: { width: 820, height: 900 }, hasTouch: true });
+    const sandboxWarnings = [];
+    page.on('console', message => { if (/Blocked script execution/.test(message.text())) sandboxWarnings.push(message.text()); });
     await page.goto(url);
     await page.waitForFunction(() => window.ready);
     await page.evaluate(() => window.mount({ src: '/report.xlsx', autoOpen: true }));
     const grip = page.frameLocator('iframe').locator('[data-resize-column="0"]').first();
     await grip.waitFor();
     const original = Number(await grip.getAttribute('aria-valuenow'));
-    const box = await grip.boundingBox();
+    const box = await frameElementBox(page, '[data-resize-column="0"]');
     const session = await page.context().newCDPSession(page);
     const touch = (type, distance = 0) => session.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x: box.x + box.width / 2 + distance, y: box.y + box.height / 2, id: 1 }] });
     await touch('touchStart');
     await touch('touchMove', 64);
     await touch('touchEnd');
     assert.equal(Number(await grip.getAttribute('aria-valuenow')), original + 64);
-    assert.equal(await grip.evaluate(element => getComputedStyle(element).touchAction), 'none');
+    assert.equal(await page.locator('iframe').evaluate(frame => frame.contentWindow.getComputedStyle(frame.contentDocument.querySelector('[data-resize-column="0"]')).touchAction), 'none');
     await grip.focus();
     await page.keyboard.press('End');
     assert.equal(Number(await grip.getAttribute('aria-valuenow')), 2400);
@@ -177,6 +191,7 @@ test('touch column resizing and keyboard limits use the same reversible display 
     assert.equal(await grip.getAttribute('aria-orientation'), 'vertical');
     assert.ok(await grip.getAttribute('aria-controls'));
     assert.deepEqual(await page.evaluate(() => window.previewErrors), []);
+    assert.deepEqual(sandboxWarnings, []);
     await session.detach();
   } finally { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 });
