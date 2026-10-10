@@ -13,3 +13,5 @@ Reports about current `main` source and reproducible regressions are welcome. Th
 Keep this browser-only and read-only. Preserve script-disabled frames, local dependencies, consent, continuous pages and offscreen resource reclamation. Do not execute macros/formulas or add conversion servers, download controls or proprietary/watermarked engines. Explain renderer and initial-memory boundaries honestly. Optional operator samples must not be required by normal CI.
 
 Ordinary bugs/ideas can use public issues. Coordinate disclosure after a fix and verification. Do not test someone else's live service without authorization.
+
+The legacy DOC renderer pins DOMPurify to 3.4.15. This project's scoped npm override installs the patched 3.4.16 release. npm does not apply overrides from dependencies: integrating applications must include the same `@file-viewer/doc` override in their root manifest and refresh their lockfile until the upstream renderer updates its pin. Keep the script-disabled document frame and local sanitization enabled independently of this dependency fix.
