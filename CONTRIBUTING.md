@@ -36,6 +36,6 @@ Generated output, dependencies and temporary evidence are not source edits. Pres
 - Discuss larger directions with a proposal: the question, alternatives and an observable success condition. Small fixes need no proposal first. Uncertain experiments can be draft PRs.
 - Keep diffs reviewable. Explain why a change helps and its compatibility/security/accessibility effects. List exact checks and results; say what remains unrun. AI-generated claims are not verification.
 - Human or AI-written code has the same expectations: understand the diff, check provenance/licenses and provide reproducible evidence. Naming an AI tool or sharing prompts is optional.
-- Open a PR against `main` using the checklist. CI checks untrusted PRs without production secrets or deployment. Respond to review; maintainers merge when changes and evidence are ready. No response-time guarantee is implied.
+- Open a PR against `main` using the checklist. GitHub Actions runs only lockfile dependency security audits; run the relevant tests and build locally and include the results. Actions has read-only permissions and no production secrets or deployment. Respond to review; maintainers merge when changes and evidence are ready. No response-time guarantee is implied.
 
 Be kind to people who are learning. Prefer specific questions and constructive evidence to gatekeeping. Vulnerabilities belong in [SECURITY.md](SECURITY.md)'s private reporting channel. Project code uses [LICENSE](LICENSE); third-party code/assets keep their own terms.

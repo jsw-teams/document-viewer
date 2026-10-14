@@ -2,6 +2,8 @@
 
 ## Open collaboration
 
+- GitHub Actions runs dependency security audits only, against committed lockfiles, with read-only permissions and no package installation, builds, browser tests, deployment, synchronization or paid source scans. Run relevant verification locally before publishing; do not restore removed workflows or weaken audit thresholds without an operator request.
+
 - Welcome curiosity, Vibe Coding and AI-assisted contributions without tool restrictions. Review understandable changes and actual verification, not how code was produced. Follow CONTRIBUTING.md and report vulnerabilities privately via SECURITY.md.
 - Keep PRs focused, add relevant regression coverage, preserve public/legacy contracts and third-party attribution, and report unrun checks honestly. Never deploy or change production data/routes/storage as contribution verification. Untrusted PR CI must not receive deployment secrets.
 
