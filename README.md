@@ -2,7 +2,7 @@
 
 Curious about improving this project? Vibe Coding and AI-assisted contributions are welcome, with no tool restrictions. Start with [Contributing](CONTRIBUTING.md), follow [AGENTS.md](AGENTS.md), and share a small, understandable change with reproducible tests. [Report a bug or idea](https://github.com/jsw-teams/document-viewer/issues/new/choose) · [Security](SECURITY.md) · [License](LICENSE).
 
-Browser-only inline document previews for static sites and shared document URLs. Cloud builds require only Node.js and `npm ci`; no LibreOffice, Office installation or conversion backend is used.
+Browser-only inline document previews for static sites and shared document URLs. Cloud builds require only Node.js and `npm install`; no LibreOffice, Office installation or conversion backend is used.
 
 ## Supported formats
 
@@ -58,7 +58,7 @@ Design references include [LibreOffice Calc](https://docs.libreoffice.org/sc.htm
 ## Build and integrate
 
 ```sh
-npm ci
+npm install
 npm run build
 ```
 
@@ -113,3 +113,8 @@ npm test
 ```
 
 Tests use local browser fixtures. They do not upload documents to any service.
+
+Dependency maintenance: no tracked lockfiles. npm install resolves current compatible versions;
+daily Dependabot PRs advance declared minimums and daily security audits resolve a disposable tree.
+Audit snapshots are removed after the check. No automatic merge or production deployment.
+SheetJS follows the official evergreen CDN tarball (build-time only); it never falls back to the stale npm package.

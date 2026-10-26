@@ -6,7 +6,7 @@ on:
   pull_request:
     paths: ['package.json', 'package-lock.json', '.github/workflows/dependency-security.yml']
   schedule:
-    - cron: '17 15 * * 1'
+    - cron: '17 15 * * *'
   workflow_dispatch:
 permissions:
   contents: read
@@ -24,8 +24,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
-      - name: Audit the committed dependency tree without installing packages
+      - name: Audit a freshly resolved disposable dependency tree
         env:
           npm_config_fetch_timeout: '60000'
           npm_config_fetch_retries: '2'
-        run: npm audit --package-lock-only --audit-level=high
+        run: npm run audit
