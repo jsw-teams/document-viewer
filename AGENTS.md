@@ -1,6 +1,9 @@
+Operator update 2026-10-26: dependency checks and compatible automatic repairs run weekly.
+A scheduled maintenance workflow may install dependencies and run regressions with read-only access; a separate publishing job may commit verified dependency-only fixes. Do not bypass branch protection, force major upgrades, or retain lockfiles. This supersedes older audit-only / daily maintenance instructions.
+
 Operator update 2026-10-26: remove tracked lockfiles, use npm install and compatible version ranges.
 Run npm run audit; its fresh resolution snapshot lives only in a disposable temporary directory.
-Use published release ranges for project dependencies; daily Dependabot and regression checks replace fixed source pins.
+Use published release ranges for project dependencies; weekly Dependabot and regression checks replace fixed source pins.
 This explicit operator update supersedes older lockfile/pin instructions below.
 
 # Document viewer development

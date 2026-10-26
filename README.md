@@ -115,6 +115,8 @@ npm test
 Tests use local browser fixtures. They do not upload documents to any service.
 
 Dependency maintenance: no tracked lockfiles. npm install resolves current compatible versions;
-daily Dependabot PRs advance declared minimums and daily security audits resolve a disposable tree.
+weekly Dependabot PRs advance declared minimums and daily security audits resolve a disposable tree.
 Audit snapshots are removed after the check. No automatic merge or production deployment.
 SheetJS follows the official evergreen CDN tarball (build-time only); it never falls back to the stale npm package.
+
+Weekly automatic dependency maintenance resolves compatible updates, audits and runs this project's regression suite with read-only access, then uses a separate job to commit verified manifest-only repairs. Failed checks or branch protection retain a repair PR; major upgrades are not forced. No lockfiles are retained. The existing package release process remains separate.
