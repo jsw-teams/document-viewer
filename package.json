@@ -31,7 +31,7 @@
     "audit": "node tools/audit-dependencies.mjs high"
   },
   "dependencies": {
-    "@aiden0z/pptx-renderer": "^1.3.0",
+    "@aiden0z/pptx-renderer": "^1.4.0",
     "@file-viewer/doc": "^3.2.2",
     "cfb": "^1.2.2",
     "docx-preview": "^0.4.1",
