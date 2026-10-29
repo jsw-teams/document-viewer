@@ -10,7 +10,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    uses: jsw-teams/shieldweave/.github/workflows/dependency-maintenance.yml@main
+    uses: jsw-teams/edgeaegis/.github/workflows/dependency-maintenance.yml@main
     with:
       directory: .
       audit-level: high

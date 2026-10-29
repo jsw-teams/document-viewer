@@ -1,6 +1,6 @@
 {
   "name": "@jsw-teams/document-viewer",
-  "version": "2026.10.1",
+  "version": "2026.10.2",
   "description": "Browser-only, on-demand PDF and Office previews for static websites and shared URLs.",
   "type": "module",
   "license": "MIT",

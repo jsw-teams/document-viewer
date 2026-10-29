@@ -4,3 +4,4 @@ dist/
 
 package-lock.json
 artifacts-dependency-*.log
+.artifacts/
