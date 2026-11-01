@@ -32,12 +32,12 @@
   },
   "dependencies": {
     "@aiden0z/pptx-renderer": "^1.4.0",
-    "@file-viewer/doc": "^3.2.2",
+    "@file-viewer/doc": "^3.3.3",
     "cfb": "^1.2.2",
     "docx-preview": "^0.4.1",
     "esbuild": "^0.28.2",
     "fflate": "^0.8.3",
-    "pdfjs-dist": "^6.4.299",
+    "pdfjs-dist": "^6.5.438",
     "xlsx": "https://cdn.sheetjs.com/xlsx-latest/xlsx-latest.tgz"
   },
   "overrides": {
