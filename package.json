@@ -32,7 +32,7 @@
   },
   "dependencies": {
     "@aiden0z/pptx-renderer": "^1.4.0",
-    "@file-viewer/doc": "^3.3.3",
+    "@file-viewer/doc": "^3.3.6",
     "cfb": "^1.2.2",
     "docx-preview": "^0.4.1",
     "esbuild": "^0.28.2",
@@ -46,7 +46,7 @@
     }
   },
   "devDependencies": {
-    "axe-core": "^4.14.0",
+    "axe-core": "^4.14.1",
     "playwright": "^1.65.1"
   }
 }
